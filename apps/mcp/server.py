@@ -1,5 +1,6 @@
 import os, sys, httpx
 from typing import Any, Iterable
+from .exec_api import scripts_run
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("cram-books")
@@ -11,6 +12,12 @@ def _exec_url() -> str:
     if not url:
         raise RuntimeError("EXEC_URL is not set")
     return url
+
+def _script_id() -> str:
+    sid = os.environ.get("SCRIPT_ID")
+    if not sid:
+        raise RuntimeError("SCRIPT_ID is not set")
+    return sid
 
 async def _get(params: dict[str, Any] | list[tuple[str, Any]]) -> dict:
     url = _exec_url()
@@ -85,6 +92,76 @@ async def books_get(book_id: Any = None, book_ids: Any = None) -> dict:
         return await _get({"op": "books.get", "book_id": single})
 
     return {"ok": False, "op": "books.get", "error": {"code": "BAD_INPUT", "message": "book_id or book_ids is required"}}
+
+
+# --- Execution API based tools (experimental) ---
+@mcp.tool()
+async def books_find_exec(query: Any, dev_mode: bool = True) -> dict:
+    """books.find via Apps Script Execution API (scripts.run)
+    Requires env: SCRIPT_ID, GAS_ACCESS_TOKEN
+    """
+    q = _coerce_str(query, ("query","q","text"))
+    if not q:
+        return {"ok": False, "op":"books.find","error":{"code":"BAD_INPUT","message":"query is required"}}
+    try:
+        result = await scripts_run(
+            function="booksFind",
+            parameters=[{"query": q}],
+            dev_mode=dev_mode,
+            script_id=_script_id(),
+        )
+        return result
+    except Exception as e:
+        return {"ok": False, "op":"books.find", "error": {"code":"EXEC_API_ERROR","message": str(e)}}
+
+
+@mcp.tool()
+async def books_get_exec(book_id: Any = None, book_ids: Any = None, dev_mode: bool = True) -> dict:
+    """books.get via Apps Script Execution API (scripts.run)
+    Accepts single or multiple IDs.
+    Requires env: SCRIPT_ID, GAS_ACCESS_TOKEN
+    """
+    # Reuse normalization from GET tool
+    def _as_list(x: Any) -> list[str]:
+        if x is None:
+            return []
+        if isinstance(x, (list, tuple)):
+            out: list[str] = []
+            for v in x:
+                if isinstance(v, str):
+                    out.append(_strip_quotes(v))
+                elif isinstance(v, dict):
+                    s = _coerce_str(v, ("book_id","id"))
+                    if s:
+                        out.append(s)
+            return out
+        if isinstance(x, str):
+            return [_strip_quotes(x)]
+        return []
+
+    many = _as_list(book_ids)
+    if not many and isinstance(book_id, (list, tuple)):
+        many = _as_list(book_id)
+    single = _coerce_str(book_id, ("book_id","id")) if not many else None
+
+    req: dict[str, Any] = {}
+    if many:
+        req["book_ids"] = many
+    elif single:
+        req["book_id"] = single
+    else:
+        return {"ok": False, "op":"books.get","error":{"code":"BAD_INPUT","message":"book_id or book_ids is required"}}
+
+    try:
+        result = await scripts_run(
+            function="booksGet",
+            parameters=[req],
+            dev_mode=dev_mode,
+            script_id=_script_id(),
+        )
+        return result
+    except Exception as e:
+        return {"ok": False, "op":"books.get", "error": {"code":"EXEC_API_ERROR","message": str(e)}}
 
 if __name__ == "__main__":
     import uvicorn
