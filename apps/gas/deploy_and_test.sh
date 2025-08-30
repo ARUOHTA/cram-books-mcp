@@ -48,7 +48,9 @@ echo "DEPLOY_ID=${DEPLOY_ID}" >&2
 echo "BASE_URL=${BASE}" >&2
 
 echo "[3/3] Hitting WebApp via curl" >&2
-if [[ "${method^^}" == "POST" ]]; then
+# Normalize method to uppercase without requiring Bash 4+ (macOS compatibility)
+METHOD_UC=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
+if [ "$METHOD_UC" = "POST" ]; then
   if [[ -z "$data_json" ]]; then
     echo "Missing -d '<json>' for POST." >&2
     exit 1
@@ -61,6 +63,11 @@ else
     echo "Usage: $0 'op=books.find&query=現代文レベル別'" >&2
     exit 1
   fi
-  curl -sS -L --get --data-urlencode "$qs" "$BASE"
+  # Support multiple query params split by '&' and encode each
+  args=( )
+  IFS='&' read -r -a parts <<< "$qs"
+  for p in "${parts[@]}"; do
+    args+=( --data-urlencode "$p" )
+  done
+  curl -sS -L --get "${args[@]}" "$BASE"
 fi
-
