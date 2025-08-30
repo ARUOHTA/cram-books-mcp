@@ -38,6 +38,16 @@
 [Apps Script(GAS) Webアプリ] ──────────→ [Google スプレッドシート(参考書マスター)]
 ```
 
+## ✅ 現状の進捗と仕様要約（重要）
+
+- GAS 側の `books.get` は GET で複数IDに対応（`doGet` が `e.parameters` を解釈）。
+  - 例: `?op=books.get&book_ids=gMB017&book_ids=gMB018` または `?book_id=...` を複数付与。
+- MCP 側の `books_get` ツールは単一/複数ID両対応に更新済み（Cloud Run にデプロイ済）。
+- POST リクエストについては、匿名公開WebAppで 302 → `googleusercontent.com/macros/echo` に転送され HTML 応答になる挙動を確認（GET は正常）。
+  - 当面は GET で統一運用（複数IDもGETで可）。
+  - 将来は Execution API（scripts.run, OAuth）経由のPOSTを検討（認証/HMACも並行）。
+
+
 ## 📁 プロジェクト構造
 
 ```
@@ -125,6 +135,7 @@ uv run python server.py
 | `?op=ping` | ヘルスチェック | なし |
 | `?op=books.find&query={検索語}` | 参考書の検索 | query: 検索キーワード |
 | `?op=books.get&book_id={ID}` | 参考書の詳細取得 | book_id: 参考書ID |
+| `?op=books.get&book_ids={ID}&book_ids={ID}` | 参考書の詳細取得（複数） | book_ids: 繰り返し指定可 |
 | `?op=health` | システムステータス | なし |
 
 ### POST
@@ -207,12 +218,26 @@ uv run python server.py
 }
 ```
 
+#### books.get（複数ID）
+```json
+{
+  "ok": true,
+  "op": "books.get",
+  "data": {
+    "books": [
+      { "id": "gMB017", "title": "...", "subject": "..." },
+      { "id": "gMB018", "title": "...", "subject": "..." }
+    ]
+  }
+}
+```
+
 ### MCP ツール
 
 | ツール名 | 説明 | 主要引数 | 返り値 |
 |---------|------|---------|--------|
 | `books_find` | 参考書の検索 | `query: string` | books.find のレスポンス |
-| `books_get` | 参考書の詳細取得 | `book_id: string` | books.get のレスポンス |
+| `books_get` | 参考書の詳細取得 | `book_id: string` または `book_ids: string[]` | books.get のレスポンス |
 | `books_create` | 参考書の新規登録 | `book: object`, `id_prefix?: string` | 作成された参考書のID |
 | `books_filter` | 条件による絞り込み | `where?: object`, `contains?: object`, `limit?: number` | フィルタ結果 |
 

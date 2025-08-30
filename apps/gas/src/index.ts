@@ -97,7 +97,17 @@ export function authorizeOnce(): void {
 }
 
 export function doGet(e: GoogleAppsScript.Events.DoGet): GoogleAppsScript.Content.TextOutput {
-  const p = (e && e.parameter) || {};
+  const p: Record<string, any> = (e && e.parameter) || {};
+  const params: Record<string, string[]> = (e && (e as any).parameters) || {} as any;
+
+  // GETでも複数IDを扱えるように、e.parameters を取り込む
+  if (p.op === "books.get") {
+    if (Array.isArray(params["book_ids"]) && params["book_ids"].length > 0) {
+      p["book_ids"] = params["book_ids"]; // ?book_ids=ID&book_ids=ID...
+    } else if (Array.isArray(params["book_id"]) && params["book_id"].length > 1) {
+      p["book_ids"] = params["book_id"]; // ?book_id=ID&book_id=ID...
+    }
+  }
   
   if (p.op) {
     const route = (req: Record<string, any>): ApiResponse => {
@@ -365,8 +375,10 @@ function booksFind(req: Record<string, any>): ApiResponse {
  * 参考書マスター：IDで取得（正規化して返す）
  *******************************/
 function booksGet(req: Record<string, any>): ApiResponse {
-  const { book_id, file_id = CONFIG.BOOKS_FILE_ID, sheet = CONFIG.BOOKS_SHEET } = req;
-  if (!book_id) return ng("books.get", "BAD_REQUEST", "book_id が必要です");
+  const { book_id, book_ids, file_id = CONFIG.BOOKS_FILE_ID, sheet = CONFIG.BOOKS_SHEET } = req;
+  // 複数ID対応: book_ids (string[]) または book_id が配列の場合
+  const listParam: any = (Array.isArray(book_ids) ? book_ids : (Array.isArray(book_id) ? book_id : null));
+  if (!book_id && !listParam) return ng("books.get", "BAD_REQUEST", "book_id または book_ids が必要です");
 
   // ---- 小ヘルパ ----
   const norm = (s: any): string => (s ?? "").toString().trim().toLowerCase().normalize("NFKC");
@@ -420,7 +432,77 @@ function booksGet(req: Record<string, any>): ApiResponse {
     if (IDX.id < 0 || IDX.title < 0 || IDX.subject < 0) {
       return ng("books.get", "BAD_HEADER", "必要な列（参考書ID/参考書名/教科）が見つかりません", { headers });
     }
+    // 複数IDが指定された場合
+    if (listParam && Array.isArray(listParam) && listParam.length > 0) {
+      const targetIds = new Set(listParam.map((x: any) => String(x).trim()));
+      // 収集用マップ: id -> { meta, chapters[] }
+      const booksMap: Record<string, { meta: any | null; chapters: ChapterInfo[] }> = {};
+      for (const id of targetIds) booksMap[id] = { meta: null, chapters: [] };
 
+      let currentId: string | null = null;
+      for (const r of values) {
+        const idCell = (r[IDX.id] ?? "").toString().trim();
+        if (idCell) currentId = idCell;
+        if (!currentId || !targetIds.has(currentId)) continue;
+
+        const bucket = booksMap[currentId];
+        if (bucket.meta === null && idCell) {
+          bucket.meta = {
+            id: currentId,
+            title: (r[IDX.title] ?? "").toString(),
+            subject: (r[IDX.subject] ?? "").toString(),
+            monthly_goal_text: (IDX.goal >= 0 ? (r[IDX.goal] ?? "").toString() : ""),
+            unit_load: (IDX.unit >= 0 ? toNumberOrNull(r[IDX.unit]) : null),
+            book_type: (IDX.btype >= 0 ? (r[IDX.btype] ?? "").toString() : ""),
+            quiz_type: (IDX.qtype >= 0 ? (r[IDX.qtype] ?? "").toString() : ""),
+            quiz_id  : (IDX.qid >= 0 ? (r[IDX.qid] ?? "").toString() : ""),
+          };
+        }
+
+        const chName = (IDX.chapName >= 0 ? (r[IDX.chapName] ?? "").toString().trim() : "");
+        const chBeg  = (IDX.chapBeg >= 0 ? toNumberOrNull(r[IDX.chapBeg]) : null);
+        const chEnd  = (IDX.chapEnd >= 0 ? toNumberOrNull(r[IDX.chapEnd]) : null);
+        const chIdx  = (IDX.chapIdx >= 0 ? toNumberOrNull(r[IDX.chapIdx]) : null);
+        const numSty = (IDX.numStyle >= 0 ? (r[IDX.numStyle] ?? "").toString().trim() : "");
+        if (chName || chBeg != null || chEnd != null) {
+          bucket.chapters.push({
+            idx: chIdx ?? (bucket.chapters.length + 1),
+            title: chName || null,
+            range: (chBeg != null || chEnd != null) ? { start: chBeg, end: chEnd } : null,
+            numbering: numSty || null,
+          });
+        }
+      }
+
+      // 結果整形
+      const books: BookDetails[] = [];
+      for (const id of targetIds) {
+        const bucket = booksMap[id];
+        if (!bucket || !bucket.meta) continue;
+        const mg = parseMonthlyGoal(bucket.meta.monthly_goal_text);
+        books.push({
+          id: bucket.meta.id,
+          title: bucket.meta.title,
+          subject: bucket.meta.subject,
+          monthly_goal: {
+            text: bucket.meta.monthly_goal_text || "",
+            per_day_minutes: mg?.per_day_minutes ?? null,
+            days: mg?.days ?? null,
+            total_minutes_est: mg?.total_minutes_est ?? null,
+          },
+          unit_load: bucket.meta.unit_load ?? null,
+          structure: { chapters: bucket.chapters },
+          assessment: {
+            book_type: bucket.meta.book_type || "",
+            quiz_type: bucket.meta.quiz_type || "",
+            quiz_id: bucket.meta.quiz_id || "",
+          },
+        });
+      }
+      return ok("books.get", { books });
+    }
+
+    // 単一ID：従来どおり
     let currentId: string | null = null;
     let started = false;
     let meta: any = null;

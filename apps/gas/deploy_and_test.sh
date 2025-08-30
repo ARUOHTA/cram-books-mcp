@@ -63,7 +63,8 @@ if [ "$METHOD_UC" = "POST" ]; then
     echo "Missing -d '<json>' for POST." >&2
     exit 1
   fi
-  curl -sS -L -X POST "$BASE" \
+  # Note: Google Apps Script may return 301/302/303. Ensure POST is preserved across redirects.
+  curl -sS -L --post301 --post302 --post303 -X POST "$BASE" \
     -H 'Content-Type: application/json' \
     -d "$data_json"
 else
