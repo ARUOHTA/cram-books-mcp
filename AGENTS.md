@@ -229,6 +229,14 @@ clasp push                    # ローカル→リモート反映（dist）
 clasp deployments             # デプロイID一覧
 clasp deploy -i <DEPLOY_ID>   # 既存デプロイIDを維持して再デプロイ
 clasp open                    # エディタを開く
+
+#### デプロイ前提の自動テスト（標準運用）
+- 方針: 「関数を変更→毎回、新規デプロイを作成→curlで叩いて確認」
+- スクリプト: `apps/gas/deploy_and_test.sh`
+  - 役割: 最新HEADをpush→新規デプロイ作成→WebAppをcurlで叩く
+  - GET例: `apps/gas/deploy_and_test.sh 'op=books.find&query=現代文レベル別'`
+  - POST例: `apps/gas/deploy_and_test.sh -X POST -d '{"op":"books.filter","where":{"教科":"数学"}}'`
+  - 出力: `DEPLOY_ID` と APIのJSONレスポンス
 ```
 
 #### テスト方法（重要）
@@ -237,6 +245,8 @@ clasp open                    # エディタを開く
 # GAS Web App のURLを取得
 clasp deployments  # 例: AKfycb... @8 がWebAppデプロイ
 curl -L "https://script.google.com/macros/s/<DEPLOY_ID>/exec?op=books.find&query=青チャート"
+## もしくは、上記スクリプトで一発実行
+apps/gas/deploy_and_test.sh 'op=books.find&query=青チャート'
 
 # POSTテスト
 curl -L -X POST "https://script.google.com/macros/s/<DEPLOY_ID>/exec" \
