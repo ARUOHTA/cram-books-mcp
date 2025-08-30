@@ -12,6 +12,15 @@ const buildOptions = {
   target: "es2020",
   legalComments: "none",
   logLevel: "info",
+  globalName: "Gas",
+  footer: {
+    js: `
+// Export global functions for Google Apps Script
+globalThis.doGet = Gas.doGet;
+globalThis.doPost = Gas.doPost;
+globalThis.authorizeOnce = Gas.authorizeOnce;
+`,
+  },
 };
 
 if (isWatch) {
