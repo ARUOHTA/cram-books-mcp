@@ -415,6 +415,26 @@ Claude: その参考書の詳細を教えてください
 - Cloud Run のログ: `gcloud run logs read --service=$IMAGE`
 - `print(..., file=sys.stderr)` でエラーログ出力
 
+#### MCP/EXEC_URL 運用（固定URL方式・推奨）
+- 目的: MCPは`EXEC_URL`へGAS WebAppをフォワードするため、URL（デプロイIDURL）が変わらないように運用する
+- 方針: 本番のWebAppデプロイは「既存デプロイIDを維持して再デプロイ」する（`clasp deploy -i <PROD_DEPLOY_ID>`）
+- 初期設定（本番Cloud Run; 初回のみ）:
+  - 固定デプロイIDURLを`EXEC_URL`に設定してデプロイ
+  - 例:
+    - `gcloud run deploy cram-books-mcp \
+       --region asia-northeast1 \
+       --image <現行の本番イメージ> \
+       --set-env-vars EXEC_URL="https://script.google.com/macros/s/<PROD_DEPLOY_ID>/exec" \
+       --allow-unauthenticated --timeout=300 --port=8080`
+- 本番GAS更新（毎回）:
+  - `cd apps/gas && npm run build && clasp push && clasp deploy -i <PROD_DEPLOY_ID>`
+  - URLは不変のため、Cloud Run側の再デプロイや`EXEC_URL`更新は不要（MCPコード更新時のみ再デプロイ）
+- ローカルMCP（任意）:
+  - `apps/mcp/.env`の`EXEC_URL`を固定URLに設定し、`uv run python server.py`
+- 確認:
+  - `gcloud run services describe cram-books-mcp --region asia-northeast1 \
+     --format='value(spec.template.spec.containers[0].env)'`
+
 ## 📝 ベストプラクティス（抜粋）
 
 ### TypeScript (GAS)
