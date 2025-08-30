@@ -5,7 +5,7 @@ const isWatch = argv.includes("--watch");
 
 const buildOptions = {
   entryPoints: ["src/index.ts"],
-  outfile: "dist/Code.js",
+  outfile: "dist/book_master.js",
   bundle: true,
   platform: "browser",
   format: "iife",
@@ -39,5 +39,5 @@ if (isWatch) {
   console.log("watching for changes...");
 } else {
   await build(buildOptions);
-  console.log("built: dist/Code.js");
+  console.log("built: dist/book_master.js");
 }

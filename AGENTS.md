@@ -38,6 +38,16 @@
 [Apps Script(GAS) Webアプリ] ──────────→ [Google スプレッドシート(参考書マスター)]
 ```
 
+## ✅ 現状の進捗と仕様要約（重要）
+
+- GAS 側の `books.get` は GET で複数IDに対応（`doGet` が `e.parameters` を解釈）。
+  - 例: `?op=books.get&book_ids=gMB017&book_ids=gMB018` または `?book_id=...` を複数付与。
+- MCP 側の `books_get` ツールは単一/複数ID両対応に更新済み（Cloud Run にデプロイ済）。
+- POST リクエストについては、匿名公開WebAppで 302 → `googleusercontent.com/macros/echo` に転送され HTML 応答になる挙動を確認（GET は正常）。
+  - 当面は GET で統一運用（複数IDもGETで可）。
+  - 将来は Execution API（scripts.run, OAuth）経由のPOSTを検討（認証/HMACも並行）。
+
+
 ## 📁 プロジェクト構造
 
 ```
@@ -125,6 +135,7 @@ uv run python server.py
 | `?op=ping` | ヘルスチェック | なし |
 | `?op=books.find&query={検索語}` | 参考書の検索 | query: 検索キーワード |
 | `?op=books.get&book_id={ID}` | 参考書の詳細取得 | book_id: 参考書ID |
+| `?op=books.get&book_ids={ID}&book_ids={ID}` | 参考書の詳細取得（複数） | book_ids: 繰り返し指定可 |
 | `?op=health` | システムステータス | なし |
 
 ### POST
@@ -207,12 +218,26 @@ uv run python server.py
 }
 ```
 
+#### books.get（複数ID）
+```json
+{
+  "ok": true,
+  "op": "books.get",
+  "data": {
+    "books": [
+      { "id": "gMB017", "title": "...", "subject": "..." },
+      { "id": "gMB018", "title": "...", "subject": "..." }
+    ]
+  }
+}
+```
+
 ### MCP ツール
 
 | ツール名 | 説明 | 主要引数 | 返り値 |
 |---------|------|---------|--------|
 | `books_find` | 参考書の検索 | `query: string` | books.find のレスポンス |
-| `books_get` | 参考書の詳細取得 | `book_id: string` | books.get のレスポンス |
+| `books_get` | 参考書の詳細取得 | `book_id: string` または `book_ids: string[]` | books.get のレスポンス |
 | `books_create` | 参考書の新規登録 | `book: object`, `id_prefix?: string` | 作成された参考書のID |
 | `books_filter` | 条件による絞り込み | `where?: object`, `contains?: object`, `limit?: number` | フィルタ結果 |
 
@@ -229,6 +254,28 @@ clasp push                    # ローカル→リモート反映（dist）
 clasp deployments             # デプロイID一覧
 clasp deploy -i <DEPLOY_ID>   # 既存デプロイIDを維持して再デプロイ
 clasp open                    # エディタを開く
+
+#### ソースオブトゥルースとビルド
+- ソースの正: `apps/gas/src`（TypeScript）
+- ビルド出力: `apps/gas/dist/book_master.js`（GASにpushされるファイル）
+- 禁止: `dist/`の手編集（常に`npm run build`で生成）
+- `.gitignore`: `apps/gas/dist/` はビルド成果物として無視（Gitに載せない）
+
+#### 標準の検証フロー（毎回これを実行）
+- 変更→ビルド→push→新規デプロイ→curlで検証をワンコマンド化
+- スクリプト: `apps/gas/deploy_and_test.sh`
+  - GET 例: `apps/gas/deploy_and_test.sh 'op=books.find&query=現代文レベル別'`
+  - POST例: `apps/gas/deploy_and_test.sh -X POST -d '{"op":"books.filter","where":{"教科":"数学"}}'`
+  - 役割: `npm run build` → `clasp push` → `clasp deploy`（新規） → `curl -L`
+  - 出力: `DEPLOY_ID/BASE_URL`（stderr）とJSONレスポンス（stdout）
+
+#### デプロイ前提の自動テスト（標準運用）
+- 方針: 「関数を変更→毎回、新規デプロイを作成→curlで叩いて確認」
+- スクリプト: `apps/gas/deploy_and_test.sh`
+  - 役割: 最新HEADをpush→新規デプロイ作成→WebAppをcurlで叩く
+  - GET例: `apps/gas/deploy_and_test.sh 'op=books.find&query=現代文レベル別'`
+  - POST例: `apps/gas/deploy_and_test.sh -X POST -d '{"op":"books.filter","where":{"教科":"数学"}}'`
+  - 出力: `DEPLOY_ID` と APIのJSONレスポンス
 ```
 
 #### テスト方法（重要）
@@ -237,6 +284,8 @@ clasp open                    # エディタを開く
 # GAS Web App のURLを取得
 clasp deployments  # 例: AKfycb... @8 がWebAppデプロイ
 curl -L "https://script.google.com/macros/s/<DEPLOY_ID>/exec?op=books.find&query=青チャート"
+## 推奨: 上記スクリプトで一発実行（毎回これを使う）
+apps/gas/deploy_and_test.sh 'op=books.find&query=青チャート'
 
 # POSTテスト
 curl -L -X POST "https://script.google.com/macros/s/<DEPLOY_ID>/exec" \
@@ -244,6 +293,10 @@ curl -L -X POST "https://script.google.com/macros/s/<DEPLOY_ID>/exec" \
   -d '{"op":"books.filter","where":{"教科":"数学"}}'
 
 注意: スクリプトIDURLではなく、デプロイIDURLを使用。`-L`で302に追従。
+
+補足:
+- `clasp run` は環境によって出力取得が不安定なため、標準運用は「新規デプロイ→curl検証」とする
+- devMode（`&devMode=true`）はログイン済みブラウザでのみ有効。CLI検証はデプロイURL推奨
 ```
 
 ### MCP
@@ -386,6 +439,26 @@ Claude: その参考書の詳細を教えてください
 - ローカルで `python server.py` を実行してログ確認
 - Cloud Run のログ: `gcloud run logs read --service=$IMAGE`
 - `print(..., file=sys.stderr)` でエラーログ出力
+
+#### MCP/EXEC_URL 運用（固定URL方式・推奨）
+- 目的: MCPは`EXEC_URL`へGAS WebAppをフォワードするため、URL（デプロイIDURL）が変わらないように運用する
+- 方針: 本番のWebAppデプロイは「既存デプロイIDを維持して再デプロイ」する（`clasp deploy -i <PROD_DEPLOY_ID>`）
+- 初期設定（本番Cloud Run; 初回のみ）:
+  - 固定デプロイIDURLを`EXEC_URL`に設定してデプロイ
+  - 例:
+    - `gcloud run deploy cram-books-mcp \
+       --region asia-northeast1 \
+       --image <現行の本番イメージ> \
+       --set-env-vars EXEC_URL="https://script.google.com/macros/s/<PROD_DEPLOY_ID>/exec" \
+       --allow-unauthenticated --timeout=300 --port=8080`
+- 本番GAS更新（毎回）:
+  - `cd apps/gas && npm run build && clasp push && clasp deploy -i <PROD_DEPLOY_ID>`
+  - URLは不変のため、Cloud Run側の再デプロイや`EXEC_URL`更新は不要（MCPコード更新時のみ再デプロイ）
+- ローカルMCP（任意）:
+  - `apps/mcp/.env`の`EXEC_URL`を固定URLに設定し、`uv run python server.py`
+- 確認:
+  - `gcloud run services describe cram-books-mcp --region asia-northeast1 \
+     --format='value(spec.template.spec.containers[0].env)'`
 
 ## 📝 ベストプラクティス（抜粋）
 

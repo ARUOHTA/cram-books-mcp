@@ -1,6 +1,5 @@
-# server.py
 import os, sys, httpx
-from typing import Any
+from typing import Any, Iterable
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("cram-books")
@@ -8,12 +7,12 @@ mcp = FastMCP("cram-books")
 def log(*a): print(*a, file=sys.stderr, flush=True)
 
 def _exec_url() -> str:
-    url = os.environ.get("EXEC_URL")         # ← ここで遅延取得（import時に落とさない）
+    url = os.environ.get("EXEC_URL")
     if not url:
         raise RuntimeError("EXEC_URL is not set")
     return url
 
-async def _get(params: dict[str, Any]) -> dict:
+async def _get(params: dict[str, Any] | list[tuple[str, Any]]) -> dict:
     url = _exec_url()
     log("HTTP GET", url, params)
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
@@ -43,17 +42,51 @@ async def books_find(query: Any) -> dict:
     return await _get({"op":"books.find","query":q})
 
 @mcp.tool()
-async def books_get(book_id: Any) -> dict:
-    bid = _coerce_str(book_id, ("book_id","id"))
-    if not bid:
-        return {"ok": False, "op":"books.get","error":{"code":"BAD_INPUT","message":"book_id is required"}}
-    return await _get({"op":"books.get","book_id":bid})
+async def books_get(book_id: Any = None, book_ids: Any = None) -> dict:
+    """
+    参考書情報を取得する（単一IDまたは複数ID）
+    - 単一: book_id: str
+    - 複数: book_ids: list[str] または book_id を配列で渡してもOK
+    """
+    # 単一ID（文字列）
+    single = _coerce_str(book_id, ("book_id","id"))
+    # 複数ID（配列想定）
+    def _as_list(x: Any) -> list[str]:
+        if x is None:
+            return []
+        if isinstance(x, (list, tuple)):
+            out: list[str] = []
+            for v in x:
+                if isinstance(v, str):
+                    out.append(_strip_quotes(v))
+                elif isinstance(v, dict):
+                    s = _coerce_str(v, ("book_id","id"))
+                    if s:
+                        out.append(s)
+            return out
+        # 文字列1つだけ来た場合も配列化
+        if isinstance(x, str):
+            return [_strip_quotes(x)]
+        return []
 
-# ★ Cloud Runでは“ここで起動しない”。CLI側が起動を担当するため、何も書かない。
+    many = _as_list(book_ids)
+    # book_id 自体が配列で来るケースにも対応
+    if not many:
+        many = _as_list(book_id) if isinstance(book_id, (list, tuple)) else []
+
+    if many:
+        # GETのクエリに同名キーを複数並べる（GAS doGetで配列解釈）
+        params: list[tuple[str, Any]] = [("op", "books.get")]
+        for bid in many:
+            params.append(("book_ids", bid))
+        return await _get(params)
+
+    if single:
+        return await _get({"op": "books.get", "book_id": single})
+
+    return {"ok": False, "op": "books.get", "error": {"code": "BAD_INPUT", "message": "book_id or book_ids is required"}}
+
 if __name__ == "__main__":
-    import os
     import uvicorn
-    # Streamable HTTP の ASGI アプリを作る（エンドポイントは /mcp）
     app = mcp.streamable_http_app()
-    # Cloud Run が渡す PORT で 0.0.0.0 にバインド
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
