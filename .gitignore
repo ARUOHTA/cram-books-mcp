@@ -42,6 +42,7 @@ Thumbs.db
 
 # Build outputs
 apps/gas/dist/
+apps/gas/_tmp*.json
 apps/mcp/dist/
 
 # Logs

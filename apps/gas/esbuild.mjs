@@ -5,7 +5,7 @@ const isWatch = argv.includes("--watch");
 
 const buildOptions = {
   entryPoints: ["src/index.ts"],
-  outfile: "dist/Code.js",
+  outfile: "dist/book_master.js",
   bundle: true,
   platform: "browser",
   format: "iife",

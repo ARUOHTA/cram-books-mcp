@@ -31,10 +31,14 @@ done
 
 cd "$(dirname "$0")"
 
-echo "[1/3] Pushing latest script (clasp push)" >&2
+# Build from src to dist before pushing
+echo "[1/4] Building GAS bundle (npm run build)" >&2
+npm run --silent build || true
+
+echo "[2/4] Pushing latest script (clasp push)" >&2
 clasp push >/dev/null || true
 
-echo "[2/3] Creating new WebApp deployment (clasp deploy)" >&2
+echo "[3/4] Creating new WebApp deployment (clasp deploy)" >&2
 clasp deploy -d "auto-deploy $(date -u +%FT%TZ)" >/dev/null
 
 DEPLOY_ID=$(clasp deployments | awk '/ @[0-9]+ /{gsub("@","",$3); print $2, $3}' | sort -k2,2n | tail -1 | awk '{print $1}')
@@ -47,7 +51,7 @@ BASE="https://script.google.com/macros/s/${DEPLOY_ID}/exec"
 echo "DEPLOY_ID=${DEPLOY_ID}" >&2
 echo "BASE_URL=${BASE}" >&2
 
-echo "[3/3] Hitting WebApp via curl" >&2
+echo "[4/4] Hitting WebApp via curl" >&2
 # Normalize method to uppercase without requiring Bash 4+ (macOS compatibility)
 METHOD_UC=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
 if [ "$METHOD_UC" = "POST" ]; then
