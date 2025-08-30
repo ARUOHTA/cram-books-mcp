@@ -1,0 +1,31 @@
+{
+  "name": "gas-cram-books",
+  "version": "1.0.0",
+  "description": "Google Apps Script for CRAM Books API",
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "push:dev": "cp .clasp.dev.json .clasp.json && clasp push",
+    "push:prod": "cp .clasp.prod.json .clasp.json && clasp push",
+    "deploy:dev": "cp .clasp.dev.json .clasp.json && clasp deploy -d dev",
+    "deploy:prod": "cp .clasp.prod.json .clasp.json && clasp deploy -d prod",
+    "open:dev": "cp .clasp.dev.json .clasp.json && clasp open",
+    "open:prod": "cp .clasp.prod.json .clasp.json && clasp open",
+    "dev": "npm run build && npm run push:dev",
+    "watch": "node esbuild.mjs --watch",
+    "clasp:login": "clasp login",
+    "clasp:create": "clasp create --type standalone --rootDir dist --title 'CRAM Books API'"
+  },
+  "devDependencies": {
+    "@types/google-apps-script": "^1.0.83",
+    "@typescript-eslint/eslint-plugin": "^8.19.0",
+    "@typescript-eslint/parser": "^8.19.0",
+    "esbuild": "^0.24.2",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

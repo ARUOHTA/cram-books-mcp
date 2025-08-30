@@ -8,3 +8,41 @@ wheels/
 
 # Virtual environments
 .venv
+venv/
+env/
+
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# GAS/clasp
+.clasp.json
+apps/gas/.clasp.json
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build outputs
+apps/gas/dist/
+apps/mcp/dist/
+
+# Logs
+*.log
