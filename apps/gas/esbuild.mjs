@@ -39,5 +39,5 @@ if (isWatch) {
   console.log("watching for changes...");
 } else {
   await build(buildOptions);
-  console.log("built: dist/Code.js");
+  console.log("built: dist/book_master.js");
 }

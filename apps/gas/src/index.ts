@@ -157,7 +157,7 @@ function tableRead(req: Record<string, any>): ApiResponse {
  * 参考書マスター：検索（曖昧可）
  *******************************/
 function booksFind(req: Record<string, any>): ApiResponse {
-  const { query, limit = 10, file_id = CONFIG.BOOKS_FILE_ID, sheet = CONFIG.BOOKS_SHEET } = req;
+  const { query, limit = 20, file_id = CONFIG.BOOKS_FILE_ID, sheet = CONFIG.BOOKS_SHEET } = req;
   if (!query) return ng("books.find", "BAD_REQUEST", "query が必要です");
 
   // --- 小ヘルパ（関数内スコープ） ---
@@ -243,7 +243,7 @@ function booksFind(req: Record<string, any>): ApiResponse {
     const qTokens = tokenize(query);
     const SUBJECT_KEYS = ["現代文","古文","漢文","古文漢文","英語","数学","化学","化学基礎","物理","生物","生物基礎","日本史","世界史","地理","地学"];
     const querySubject = SUBJECT_KEYS.find(k => qTokens.includes(k.toLowerCase()));
-    const SERIES_KEYS = ["レベル別","チャート","青チャート","問題精講","基礎問題精講","リード","共通テスト","canpass","the","rules","focus","gold","ターゲット","システム","vintage","next","stage"];
+    // シリーズ個別のハードコードは避け、一般的な一致（フレーズ/被覆率）を重視する
     const seen = new Set<string>();           // 同一IDの重複を抑制（章の続き行を除外）
     const candidates: BookFindCandidate[] = [];
 
@@ -266,53 +266,40 @@ function booksFind(req: Record<string, any>): ApiResponse {
         .map(norm)
         .filter(t => t && t.length >= 2);
 
-      // Token sets and Jaccard
-      const titleAndAliases = [titleRaw, ...aliasTexts].join(" ");
-      const candTokens = new Set(tokenize(titleAndAliases));
-      const qTokSet = new Set(qTokens);
-      let inter = 0; for (const t of qTokSet) if (candTokens.has(t)) inter++;
-      const union = candTokens.size + qTokSet.size - inter || 1;
-      const jacc = inter / union;
+      // 一般的な一致評価
+      const combinedTitle = [titleRaw, ...aliasTexts].join(" ");
+      const combinedNorm = norm(combinedTitle);
+      const cTok = new Set(tokenize(combinedTitle));
+      let inter = 0; for (const t of new Set(qTokens)) if (cTok.has(t)) inter++;
+      const coverage = (qTokens.length > 0) ? inter / qTokens.length : 0; // 0..1（query側の被覆）
 
-      // スコアリング（厳密 > 方向付き部分一致 > 3文字ファジー）
-      let score = 0;
-      let reason: any = "";
-      if (hay.some(t => t === q)) {
-        score = 1.0; reason = "exact";
-      } else {
-        const targetContains = hay.some(t => t.includes(q));
-        const queryContains  = hay.some(t => q.includes(t));
-        if (targetContains) {
-          score = 0.92; reason = "partial_target";
-        } else if (queryContains) {
-          score = 0.82; reason = "partial_query";
-        } else {
-          const short = q.length >= 3 ? q.slice(0, 3) : "";
-          if (short && hay.some(t => t.includes(short))) {
-            score = 0.74; reason = "fuzzy3";
-          }
-        }
+      // ベーススコア（シンプル）
+      let score = 0; let reason: any = "";
+      if (hay.some(t => t === q)) { score = 1.0; reason = "exact"; }
+      else if (combinedNorm.includes(q)) { score = 0.95; reason = "phrase"; }
+      else if (hay.some(t => t.includes(q))) { score = 0.90; reason = "partial_target"; }
+      else if (coverage > 0) { score = 0.80; reason = "coverage"; }
+      else {
+        const short = q.length >= 3 ? q.slice(0,3) : "";
+        if (short && hay.some(t => t.includes(short))) { score = 0.72; reason = "fuzzy3"; }
       }
 
-      // 軽量ブースト
-      let boost = 0;
-      boost += Math.min(0.08, 0.08 * jacc);
-      if (norm(titleRaw).startsWith(q)) boost += 0.02;
+      // 軽微なボーナス
+      let bonus = 0;
+      if (coverage > 0) bonus += Math.min(0.15, 0.15 * coverage);
+      if (norm(titleRaw).startsWith(q)) bonus += 0.02;
       if (querySubject) {
         const subjN = norm(subjectRaw);
-        if (subjN && norm(querySubject) === subjN) boost += 0.03;
+        if (subjN && norm(querySubject) === subjN) bonus += 0.02;
       }
-      const titleTokensLower = new Set(tokenize(titleAndAliases).map(t=>t.toLowerCase()));
-      const queryTokLower = new Set(qTokens.map(t=>t.toLowerCase()));
-      const seriesHit = SERIES_KEYS.some(k => queryTokLower.has(k.toLowerCase()) && titleTokensLower.has(k.toLowerCase()));
-      if (seriesHit) boost += 0.03;
 
-      if (score > 0) {
+      const finalScore = Math.min(1, score + bonus);
+      if (finalScore > 0) {
         candidates.push({
           book_id: idRaw,
           title: titleRaw,
           subject: subjectRaw,
-          score: Math.min(1, score + boost),
+          score: finalScore,
           reason
         });
       }
