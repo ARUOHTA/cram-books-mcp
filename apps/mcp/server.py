@@ -2,6 +2,7 @@
 import os, sys, httpx
 from dataclasses import dataclass
 from typing import Any, List
+import asyncio
 import math
 
 # 可能なら埋め込みモデルを読み込む（Cloud Run 本番ではイメージに同梱推奨）
@@ -200,6 +201,9 @@ async def books_find_semantic(query: Any, top_k: int = 20) -> dict:
 if __name__ == "__main__":
     import os
     import uvicorn
+    # 起動を阻害しないため、インデックス構築は初回呼び出し時に遅延実行する
+    #（必要であれば、後で非同期タスクで温める実装に差し替え可能）
+
     # Streamable HTTP の ASGI アプリを作る（エンドポイントは /mcp）
     app = mcp.streamable_http_app()
     # Cloud Run が渡す PORT で 0.0.0.0 にバインド
