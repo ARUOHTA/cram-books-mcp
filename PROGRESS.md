@@ -42,6 +42,11 @@
 
 ## 📝 作業ログ
 
+### 2024-08-31 03:40
+- ブランチ名をmasterからmainに変更完了
+- リモート・ローカル共にmainブランチに統一
+- 旧masterブランチ削除完了
+
 ### 2024-08-31 03:35
 - GitHubリポジトリ作成完了: https://github.com/ARUOHTA/cram-books-mcp
 - 初回push成功、リモートリポジトリ統合完了
