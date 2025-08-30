@@ -10,8 +10,6 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
     "mcp[cli]>=1.13.1",
-    "numpy>=1.26",
-    "sentence-transformers>=2.7.0",
 ]
 
 [project.scripts]
