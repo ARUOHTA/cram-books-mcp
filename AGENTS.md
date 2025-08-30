@@ -230,6 +230,20 @@ clasp deployments             # デプロイID一覧
 clasp deploy -i <DEPLOY_ID>   # 既存デプロイIDを維持して再デプロイ
 clasp open                    # エディタを開く
 
+#### ソースオブトゥルースとビルド
+- ソースの正: `apps/gas/src`（TypeScript）
+- ビルド出力: `apps/gas/dist/book_master.js`（GASにpushされるファイル）
+- 禁止: `dist/`の手編集（常に`npm run build`で生成）
+- `.gitignore`: `apps/gas/dist/` はビルド成果物として無視（Gitに載せない）
+
+#### 標準の検証フロー（毎回これを実行）
+- 変更→ビルド→push→新規デプロイ→curlで検証をワンコマンド化
+- スクリプト: `apps/gas/deploy_and_test.sh`
+  - GET 例: `apps/gas/deploy_and_test.sh 'op=books.find&query=現代文レベル別'`
+  - POST例: `apps/gas/deploy_and_test.sh -X POST -d '{"op":"books.filter","where":{"教科":"数学"}}'`
+  - 役割: `npm run build` → `clasp push` → `clasp deploy`（新規） → `curl -L`
+  - 出力: `DEPLOY_ID/BASE_URL`（stderr）とJSONレスポンス（stdout）
+
 #### デプロイ前提の自動テスト（標準運用）
 - 方針: 「関数を変更→毎回、新規デプロイを作成→curlで叩いて確認」
 - スクリプト: `apps/gas/deploy_and_test.sh`
@@ -245,7 +259,7 @@ clasp open                    # エディタを開く
 # GAS Web App のURLを取得
 clasp deployments  # 例: AKfycb... @8 がWebAppデプロイ
 curl -L "https://script.google.com/macros/s/<DEPLOY_ID>/exec?op=books.find&query=青チャート"
-## もしくは、上記スクリプトで一発実行
+## 推奨: 上記スクリプトで一発実行（毎回これを使う）
 apps/gas/deploy_and_test.sh 'op=books.find&query=青チャート'
 
 # POSTテスト
@@ -254,6 +268,10 @@ curl -L -X POST "https://script.google.com/macros/s/<DEPLOY_ID>/exec" \
   -d '{"op":"books.filter","where":{"教科":"数学"}}'
 
 注意: スクリプトIDURLではなく、デプロイIDURLを使用。`-L`で302に追従。
+
+補足:
+- `clasp run` は環境によって出力取得が不安定なため、標準運用は「新規デプロイ→curl検証」とする
+- devMode（`&devMode=true`）はログイン済みブラウザでのみ有効。CLI検証はデプロイURL推奨
 ```
 
 ### MCP
