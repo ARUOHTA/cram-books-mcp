@@ -239,13 +239,16 @@ function booksFind(req: Record<string, any>): ApiResponse {
       return ng("books.find", "BAD_HEADER", "必要な列（参考書ID/参考書名/教科）が見つかりません", { headers });
     }
 
+    // クエリの事前処理
     const q = norm(query);
     const qTokens = tokenize(query);
     const SUBJECT_KEYS = ["現代文","古文","漢文","古文漢文","英語","数学","化学","化学基礎","物理","生物","生物基礎","日本史","世界史","地理","地学"];
     const querySubject = SUBJECT_KEYS.find(k => qTokens.includes(k.toLowerCase()));
     // シリーズ個別のハードコードは避け、一般的な一致（フレーズ/被覆率）を重視する
+    // 親行（参考書IDのある行）のみを対象に、DF（各トークンの出現ドキュメント数）を収集
     const seen = new Set<string>();           // 同一IDの重複を抑制（章の続き行を除外）
-    const candidates: BookFindCandidate[] = [];
+    const df: Record<string, number> = {};    // token -> doc freq
+    const parentRows: { id: string; title: string; subject: string; aliases: string[] }[] = [];
 
     for (const row of values) {
       const idRaw = (row[idxId] ?? "").toString().trim();
@@ -259,59 +262,97 @@ function booksFind(req: Record<string, any>): ApiResponse {
       if (!idRaw) continue;
       if (seen.has(idRaw)) continue;
       seen.add(idRaw);
+      const aliases = idxAlias >= 0 ? parseAliases(row[idxAlias]) : [];
+      parentRows.push({ id: idRaw, title: titleRaw, subject: subjectRaw, aliases });
 
-      // 検索対象テキスト集合（ID/タイトル/教科/+別名）
-      const aliasTexts = idxAlias >= 0 ? parseAliases(row[idxAlias]) : [];
-      const hay = [idRaw, titleRaw, subjectRaw, ...aliasTexts]
+      // DF更新（タイトル+別名のトークンユニーク集合でカウント）
+      const tokSet = new Set(tokenize([titleRaw, ...aliases].join(" ")));
+      for (const t of tokSet) {
+        df[t] = (df[t] ?? 0) + 1;
+      }
+    }
+
+    // IDF（薄い重み）：idf = log((N - df + 0.5)/(df + 0.5) + 1)
+    const N = parentRows.length || 1;
+    const idf = (t: string): number => {
+      const d = df[t] ?? 0;
+      return Math.log(((N - d + 0.5) / (d + 0.5)) + 1);
+    };
+
+    // クエリ側トークンのIDF合計（正規化係数）
+    const uniqQToks = Array.from(new Set(qTokens));
+    const sumIdfQ = uniqQToks.reduce((acc, t) => acc + idf(t), 0) || 1;
+
+    // 候補スコア算出
+    const candidates: BookFindCandidate[] = [];
+    for (const r of parentRows) {
+      const aliasTexts = r.aliases;
+      const hay = [r.id, r.title, r.subject, ...aliasTexts]
         .map(norm)
         .filter(t => t && t.length >= 2);
 
-      // 一般的な一致評価
-      const combinedTitle = [titleRaw, ...aliasTexts].join(" ");
+      // 一般的な一致評価（フレーズ/部分一致優先）
+      const combinedTitle = [r.title, ...aliasTexts].join(" ");
       const combinedNorm = norm(combinedTitle);
-      const cTok = new Set(tokenize(combinedTitle));
-      let inter = 0; for (const t of new Set(qTokens)) if (cTok.has(t)) inter++;
-      const coverage = (qTokens.length > 0) ? inter / qTokens.length : 0; // 0..1（query側の被覆）
+      const titleTokSet = new Set(tokenize(combinedTitle));
+
+      // IDF加重被覆率（query側の希少トークンほど寄与が大きい）
+      let idfHit = 0;
+      for (const t of uniqQToks) if (titleTokSet.has(t)) idfHit += idf(t);
+      const covIdf = idfHit / sumIdfQ; // 0..1
 
       // ベーススコア（シンプル）
       let score = 0; let reason: any = "";
       if (hay.some(t => t === q)) { score = 1.0; reason = "exact"; }
       else if (combinedNorm.includes(q)) { score = 0.95; reason = "phrase"; }
       else if (hay.some(t => t.includes(q))) { score = 0.90; reason = "partial_target"; }
-      else if (coverage > 0) { score = 0.80; reason = "coverage"; }
+      else if (covIdf > 0) { score = 0.80; reason = "coverage_idf"; }
       else {
         const short = q.length >= 3 ? q.slice(0,3) : "";
         if (short && hay.some(t => t.includes(short))) { score = 0.72; reason = "fuzzy3"; }
       }
 
-      // 軽微なボーナス
+      // 薄いボーナス（IDF被覆率と前方一致、教科一致）
       let bonus = 0;
-      if (coverage > 0) bonus += Math.min(0.15, 0.15 * coverage);
-      if (norm(titleRaw).startsWith(q)) bonus += 0.02;
+      if (covIdf > 0) bonus += Math.min(0.12, 0.12 * covIdf); // 最大+0.12
+      if (norm(r.title).startsWith(q)) bonus += 0.02;
       if (querySubject) {
-        const subjN = norm(subjectRaw);
+        const subjN = norm(r.subject);
         if (subjN && norm(querySubject) === subjN) bonus += 0.02;
       }
 
       const finalScore = Math.min(1, score + bonus);
       if (finalScore > 0) {
         candidates.push({
-          book_id: idRaw,
-          title: titleRaw,
-          subject: subjectRaw,
+          book_id: r.id,
+          title: r.title,
+          subject: r.subject,
           score: finalScore,
           reason
         });
       }
     }
 
+    // 降順ソート
     candidates.sort((a, b) => b.score - a.score);
-    const top = candidates[0] || null;
-    const confidence = estimateConfidence(candidates);
+
+    // 動的しきい値決定：スコアの大きな落差（ギャップ）で切る
+    // - 連続スコア差の最大値が minGap 以上の箇所を境に上位のみ採用
+    const minGap = 0.05; // 例: 0.05 以上下がる所で分割
+    let cutIndex = candidates.length; // デフォルトは全件
+    for (let i = 0; i < candidates.length - 1; i++) {
+      const d = candidates[i].score - candidates[i+1].score;
+      if (d >= minGap) { cutIndex = i + 1; break; }
+    }
+
+    // しきい値適用後、limitで上限（指定時）
+    const sliced = candidates.slice(0, typeof limit === 'number' ? Math.min(limit, cutIndex) : cutIndex);
+    const top = sliced[0] || null;
+    const confidence = estimateConfidence(sliced);
 
     return ok("books.find", {
       query,
-      candidates: candidates.slice(0, limit),
+      candidates: sliced,
       top,
       confidence
     });
