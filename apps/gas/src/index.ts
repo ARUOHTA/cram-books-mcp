@@ -17,6 +17,15 @@ import {
   booksDelete as booksDeleteHandler,
   authorizeOnce as handlersAuthorizeOnce,
 } from "./handlers/books";
+import {
+  studentsFind as studentsFindHandler,
+  studentsGet as studentsGetHandler,
+  studentsList as studentsListHandler,
+  studentsFilter as studentsFilterHandler,
+  studentsCreate as studentsCreateHandler,
+  studentsUpdate as studentsUpdateHandler,
+  studentsDelete as studentsDeleteHandler,
+} from "./handlers/students";
 
 /**
  * 手動承認（初回のみ実行）
@@ -52,7 +61,14 @@ export function doGet(e: GoogleAppsScript.Events.DoGet): GoogleAppsScript.Conten
         case "books.create": return booksCreateHandler(req);
         case "books.update": return booksUpdateHandler(req);
         case "books.delete": return booksDeleteHandler(req);
-        case "table.read":   return (isTableReadEnabled() ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
+        case "students.find":   return studentsFindHandler(req);
+        case "students.get":    return studentsGetHandler(req);
+        case "students.list":   return studentsListHandler(req);
+        case "students.filter": return studentsFilterHandler(req);
+        case "students.create": return studentsCreateHandler(req);
+        case "students.update": return studentsUpdateHandler(req);
+        case "students.delete": return studentsDeleteHandler(req);
+        case "table.read":      return (isTableReadEnabled() ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
         case "ping":         return ok("ping", { status: "ok", timestamp: new Date().toISOString() });
         default:              return ng(req.op || "unknown", "UNKNOWN_OP", "Unsupported op");
       }
@@ -77,7 +93,14 @@ export function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Cont
       case "books.create": return createJsonResponse(booksCreateHandler(req));
       case "books.update": return createJsonResponse(booksUpdateHandler(req));
       case "books.delete": return createJsonResponse(booksDeleteHandler(req));
-      case "table.read":   return createJsonResponse(isTableReadEnabled() ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
+      case "students.find":   return createJsonResponse(studentsFindHandler(req));
+      case "students.get":    return createJsonResponse(studentsGetHandler(req));
+      case "students.list":   return createJsonResponse(studentsListHandler(req));
+      case "students.filter": return createJsonResponse(studentsFilterHandler(req));
+      case "students.create": return createJsonResponse(studentsCreateHandler(req));
+      case "students.update": return createJsonResponse(studentsUpdateHandler(req));
+      case "students.delete": return createJsonResponse(studentsDeleteHandler(req));
+      case "table.read":      return createJsonResponse(isTableReadEnabled() ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
       default:               return createJsonResponse(ng(req.op || "unknown", "UNKNOWN_OP", "Unsupported op"));
     }
   } catch (err: any) {

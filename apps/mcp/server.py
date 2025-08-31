@@ -293,6 +293,115 @@ async def books_filter(where: Any = None, contains: Any = None, limit: int | Non
         return {"ok": False, "op": "books.filter", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
 
 
+# ===== Students API (MVP: master sheet only) =====
+
+def _normkey(k: str) -> str: return k.strip().lower()
+
+@mcp.tool()
+async def students_list(limit: int | None = None) -> dict:
+    """生徒一覧（親行のみ、id/name/grade/linksの簡易形）。"""
+    try:
+        data = await _get({"op": "students.list", "limit": limit or 0})
+    except Exception as e:
+        return {"ok": False, "op": "students.list", "error": {"code": "HTTP_GET_ERROR", "message": str(e)}}
+    if not isinstance(data, dict) or not data.get("ok"):
+        return {"ok": False, "op": "students.list", "error": {"code": "UPSTREAM_ERROR", "message": str(data)}}
+    items = ((data.get("data") or {}).get("students") or [])
+    students = [{
+        "id": s.get("id"),
+        "name": s.get("name"),
+        "grade": s.get("grade"),
+        "planner_sheet_id": s.get("planner_sheet_id"),
+        "meeting_doc_id": s.get("meeting_doc_id"),
+    } for s in items if isinstance(s, dict)]
+    return {"ok": True, "op": "students.list", "data": {"students": students, "count": len(students)}}
+
+@mcp.tool()
+async def students_find(query: Any, limit: int | None = 10) -> dict:
+    q = _coerce_str(query, ("query","q","text"))
+    if not q: return {"ok": False, "op": "students.find", "error": {"code": "BAD_INPUT", "message": "query is required"}}
+    try:
+        return await _get({"op": "students.find", "query": q, "limit": limit or 0})
+    except Exception as e:
+        return {"ok": False, "op": "students.find", "error": {"code": "HTTP_GET_ERROR", "message": str(e)}}
+
+@mcp.tool()
+async def students_get(student_id: Any = None, student_ids: Any = None) -> dict:
+    # 単一/複数対応
+    def _as_list(x: Any) -> list[str]:
+        if x is None: return []
+        if isinstance(x, (list, tuple)):
+            out = []
+            for v in x:
+                if isinstance(v, str): out.append(_strip_quotes(v))
+                elif isinstance(v, dict):
+                    s = _coerce_str(v, ("student_id","id"))
+                    if s: out.append(s)
+            return out
+        if isinstance(x, str): return [_strip_quotes(x)]
+        return []
+    many = _as_list(student_ids)
+    if not many and isinstance(student_id,(list,tuple)): many=_as_list(student_id)
+    single = _coerce_str(student_id, ("student_id","id")) if not many else None
+    params: dict[str, Any] = {"op": "students.get"}
+    if many: params["student_ids"] = many
+    elif single: params["student_id"] = single
+    else: return {"ok": False, "op": "students.get", "error": {"code": "BAD_INPUT", "message": "student_id or student_ids is required"}}
+    try:
+        return await _post(params)
+    except Exception as e:
+        return {"ok": False, "op": "students.get", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
+
+@mcp.tool()
+async def students_filter(where: Any = None, contains: Any = None, limit: int | None = None) -> dict:
+    payload: dict[str, Any] = {"op": "students.filter"}
+    if isinstance(where, dict): payload["where"] = where
+    if isinstance(contains, dict): payload["contains"] = contains
+    if isinstance(limit, int) and limit>0: payload["limit"] = limit
+    try:
+        return await _post(payload)
+    except Exception as e:
+        return {"ok": False, "op": "students.filter", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
+
+@mcp.tool()
+async def students_create(record: dict[str, Any] | None = None, id_prefix: str | None = None) -> dict:
+    """生徒の新規作成。record にシート見出し→値で渡す（例: {"名前":"山田太郎","学年":"高1"}）。
+    可能であれば `名前/学年` を含める。IDは s / id_prefix で自動採番。
+    """
+    payload = {"op": "students.create", "record": record or {}}
+    if id_prefix: payload["id_prefix"] = id_prefix
+    try:
+        return await _post(payload)
+    except Exception as e:
+        return {"ok": False, "op": "students.create", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
+
+@mcp.tool()
+async def students_update(student_id: Any, updates: dict[str, Any] | None = None, confirm_token: str | None = None) -> dict:
+    """生徒の更新（二段階）。updates は見出し→値のマップ。"""
+    sid = _coerce_str(student_id, ("student_id","id"))
+    if not sid: return {"ok": False, "op": "students.update", "error": {"code": "BAD_INPUT", "message": "student_id is required"}}
+    payload: dict[str, Any] = {"op": "students.update", "student_id": sid}
+    if confirm_token: payload["confirm_token"] = confirm_token
+    else:
+        if isinstance(updates, dict): payload["updates"] = updates
+        else: return {"ok": False, "op": "students.update", "error": {"code": "BAD_INPUT", "message": "updates is required for preview"}}
+    try:
+        return await _post(payload)
+    except Exception as e:
+        return {"ok": False, "op": "students.update", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
+
+@mcp.tool()
+async def students_delete(student_id: Any, confirm_token: str | None = None) -> dict:
+    sid = _coerce_str(student_id, ("student_id","id"))
+    if not sid: return {"ok": False, "op": "students.delete", "error": {"code": "BAD_INPUT", "message": "student_id is required"}}
+    payload: dict[str, Any] = {"op": "students.delete", "student_id": sid}
+    if confirm_token: payload["confirm_token"] = confirm_token
+    try:
+        return await _post(payload)
+    except Exception as e:
+        return {"ok": False, "op": "students.delete", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
+
+
 @mcp.tool()
 async def books_create(title: str, subject: str, unit_load: Any = None, monthly_goal: str | None = None, chapters: Any = None, id_prefix: str | None = None) -> dict:
     """参考書を新規作成（GAS WebApp: books.create）。LLM向け・重要ルール:
