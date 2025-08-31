@@ -295,18 +295,17 @@ async def books_filter(where: Any = None, contains: Any = None, limit: int | Non
 
 @mcp.tool()
 async def books_create(title: str, subject: str, unit_load: Any = None, monthly_goal: str | None = None, chapters: Any = None, id_prefix: str | None = None) -> dict:
-    """参考書を新規作成します（GAS WebApp: books.create）。
+    """参考書を新規作成（GAS WebApp: books.create）。簡潔なルール:
 
-    引数:
-    - title: 参考書名（必須）
-    - subject: 教科（必須）
-    - unit_load: 単位当たり処理量（数値）
-    - monthly_goal: 文字列（例: "1日30分"）
-    - chapters: 章配列（例: [{"title":"第1章","range":{"start":1,"end":20}}]）
-    - id_prefix: ID接頭辞を明示したい場合に指定（例: "gTMP"）。省略時は教科/タイトルから自動推定。
+    - 数値は数値型で（unit_load: 2 など）。
+    - chapters は最終形の配列（完全指定）。最初の章は「親行」に入り、2章目以降は下行に追加。
+    - 章の最小形: {"title":"第1章","range":{"start":1,"end":20}}（numbering は任意）。
+    - 未指定の項目は作成されません。id は自動採番（id_prefix で接頭辞指定可）。
 
-    返り値（例）:
-    { ok:true, data:{ id:"gMB123", created_rows: 3 } }
+    例:
+    {"title":"テスト本","subject":"数学","unit_load":2,
+     "monthly_goal":"1日30分","chapters":[{"title":"第1章","range":{"start":1,"end":20}}]}
+    返り値例: { ok:true, data:{ id:"gMB123", created_rows: 2 } }
     """
     payload: dict[str, Any] = {"op": "books.create", "title": title, "subject": subject}
     if unit_load is not None:
@@ -328,16 +327,16 @@ async def books_create(title: str, subject: str, unit_load: Any = None, monthly_
 
 @mcp.tool()
 async def books_update(book_id: Any, updates: Any | None = None, confirm_token: str | None = None) -> dict:
-    """参考書の更新（2段階）を行います（GAS WebApp: books.update）。
+    """参考書の更新（GAS WebApp: books.update）。安全な2段階:
 
-    ワークフロー:
-    1) プレビュー: book_id と updates を渡す → 差分と confirm_token を返す
-    2) 確定: book_id と confirm_token を渡す → { updated:true/false }
+    1) プレビュー: {book_id, updates} → 差分と confirm_token
+    2) 確定: {book_id, confirm_token} → { updated }
 
-    引数:
-    - book_id: 対象ID（必須）
-    - updates: 変更オブジェクト（title/subject/monthly_goal/unit_load/chapters 全置換）
-    - confirm_token: プレビュー応答で得たトークン（5分有効）
+    入力の注意:
+    - updates.chapters は「完全置換」。配列は最終状態を渡す（追記ではない）。
+    - 章1は親行、章2以降は下行へ書き込み（create と同等）。
+    - 変更しない項目は updates に含めない（空文字での上書きを避ける）。
+    - 数値は数値型で（unit_load など）。
     """
     bid = _coerce_str(book_id, ("book_id","id"))
     if not bid:
@@ -468,6 +467,7 @@ async def tools_help() -> dict:
             "desc": "参考書の新規作成（自動ID付与）",
             "args": {"title":"string","subject":"string","unit_load":"number?","monthly_goal":"string?","chapters":"Chapter[]?","id_prefix":"string?"},
             "example": {"title":"テスト本","subject":"数学","unit_load":2,"chapters":[{"title":"第1章","range":{"start":1,"end":20}}]},
+            "notes": "chaptersは最終形（完全指定）。第1章は親行、2章以降は下行。数値は数値型で。"
         },
         {
             "name": "books_update",
@@ -475,6 +475,7 @@ async def tools_help() -> dict:
             "args": {"book_id":"string","updates":"object?","confirm_token":"string?"},
             "example_preview": {"book_id":"gMB017","updates":{"title":"（改）"}},
             "example_confirm": {"book_id":"gMB017","confirm_token":"…"},
+            "notes": "updates.chaptersは完全置換。章1は親行、章2以降は下行。未変更項目は含めない。"
         },
         {
             "name": "books_delete",
