@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Cloud Run/Artifact Registry 用の環境変数（必要に応じて編集して `source`）
+export PROJECT_ID="your-gcp-project-id"
+export REGION="asia-northeast1"
+export SERVICE="cram-books-mcp"
+# EXEC_URL は apps/gas/.prod_deploy_id から自動取得されます。明示したい場合のみ上書きしてください。
+# export EXEC_URL="https://script.google.com/macros/s/<DEPLOY_ID>/exec"
+

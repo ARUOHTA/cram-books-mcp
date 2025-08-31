@@ -3,8 +3,8 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # Minimal runtime deps for MCP server
-RUN pip install --no-cache-dir "mcp[cli]" httpx
+RUN pip install --no-cache-dir "mcp[cli]" httpx uvicorn fastmcp
 
-COPY server.py /app/server.py
+COPY . /app/
 
 CMD ["python","-u","/app/server.py"]

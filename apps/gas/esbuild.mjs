@@ -1,5 +1,7 @@
 import { build } from "esbuild";
 import { argv } from "process";
+import { mkdir, writeFile } from "fs/promises";
+import { dirname } from "path";
 
 const isWatch = argv.includes("--watch");
 
@@ -40,4 +42,19 @@ if (isWatch) {
 } else {
   await build(buildOptions);
   console.log("built: dist/book_master.js");
+  // Emit small top-level entry .gs so that Apps Script editor's Run menu can find callable functions
+  const entryPath = "dist/_entries.gs";
+  const entrySrc = `
+// Auto-generated helper. Exposes simple top-level functions for manual runs.
+function authorizeOnceEntry() {
+  if (typeof authorizeOnce === 'function') return authorizeOnce();
+  if (typeof Gas !== 'undefined' && Gas.authorizeOnce) return Gas.authorizeOnce();
+}
+function pingEntry() {
+  if (typeof doGet === 'function') return doGet({ parameter: { op: 'ping' } });
+}
+`;
+  await mkdir(dirname(entryPath), { recursive: true });
+  await writeFile(entryPath, entrySrc, "utf8");
+  console.log("emitted:", entryPath);
 }

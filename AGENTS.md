@@ -160,6 +160,20 @@ uv run python server.py
   "contains": {"参考書名": "青チャート"}, // 部分一致
   "limit": 10
 }
+
+// books.update - 参考書の更新（メタ/章の完全置換）
+{
+  "op": "books.update",
+  "book_id": "gMB017",
+  "updates": {
+    "title": "新しいタイトル",
+    "monthly_goal": "1日60分",
+    "unit_load": 3,
+    "chapters": [
+      {"title": "改・第1章", "range": {"start": 1, "end": 10}, "numbering": "問"}
+    ]
+  }
+}
 ```
 
 ### レスポンス例（抜粋）
@@ -232,14 +246,93 @@ uv run python server.py
 }
 ```
 
-### MCP ツール
+#### books.filter（グルーピング済み, 書籍単位）
+```json
+{
+  "ok": true,
+  "op": "books.filter",
+  "data": {
+    "books": [
+      {
+        "id": "gMB001",
+        "title": "はじはじ数1新課程(確認テスト用)",
+        "subject": "数学",
+        "monthly_goal": {"text":"1day 3時間×17day","per_day_minutes":180, "days": null, "total_minutes_est": null},
+        "unit_load": 0.34,
+        "structure": {"chapters": [ {"idx":1, "title":"指数法則…", "range": {"start":1, "end":2} } ]},
+        "assessment": {"book_type":"", "quiz_type":"", "quiz_id":"..."}
+      }
+    ],
+    "count": 1,
+    "limit": 10
+  }
+}
+```
+
+#### books.create（応答例）
+```json
+{
+  "ok": true,
+  "op": "books.create",
+  "data": { "id": "gTMP001", "created_rows": 3 }
+}
+```
+
+#### books.update（応答例）
+```json
+{
+  "ok": true,
+  "op": "books.update",
+  "data": { "book_id": "gTMP001", "updated": true }
+}
+```
+
+備考（books.filter）
+- 結果は「行」ではなく「書籍単位（参考書IDごと）」にグルーピングして返します。
+- 判定は、指定した列に対してその書籍の“全行（親行＋章行）”の値を集計し、
+  - where: いずれかの行で完全一致
+  - contains: いずれかの行で部分一致
+  をすべて満たす書籍のみ採用します。
+- 列名はシートの見出し（例: 参考書名, 教科, 章の名前 など）をそのまま指定してください（大文字小文字/全角半角/前後空白は吸収）。
+
+### MCP ツール（公開中）
 
 | ツール名 | 説明 | 主要引数 | 返り値 |
 |---------|------|---------|--------|
 | `books_find` | 参考書の検索 | `query: string` | books.find のレスポンス |
 | `books_get` | 参考書の詳細取得 | `book_id: string` または `book_ids: string[]` | books.get のレスポンス |
-| `books_create` | 参考書の新規登録 | `book: object`, `id_prefix?: string` | 作成された参考書のID |
-| `books_filter` | 条件による絞り込み | `where?: object`, `contains?: object`, `limit?: number` | フィルタ結果 |
+| `books_create` | 参考書の新規登録 | `title: string`, `subject: string`, `unit_load?: number`, `monthly_goal?: string`, `chapters?: any[]`, `id_prefix?: string` | 作成ID ほか |
+| `books_filter` | 条件による絞り込み | `where?: object|string`, `contains?: object|string`, `limit?: number` | フィルタ結果（書籍単位, books配列） |
+| `books_update` | 参考書の更新（二段階） | `book_id: string`, `updates?: object`, `confirm_token?: string` | プレビュー or 確定結果 |
+| `books_delete` | 参考書の削除（二段階） | `book_id: string`, `confirm_token?: string` | プレビュー or 確定結果 |
+| `books_list` | 全参考書の親行を一覧 | `limit?: number` | `{ books:[{id,subject,title}], count }` |
+| `tools_help` | 公開ツールの使い方ガイド | なし | ツール一覧（引数/例/注意） |
+
+#### MCP ツール詳細（二段階フロー）
+
+- books_update:
+  - プレビュー: `book_id`, `updates` → `requires_confirmation: true`, `preview.meta_changes`, `preview.chapters`, `confirm_token`
+  - 確定: `book_id`, `confirm_token` → `{ updated: true/false }`
+  - updates: `title`, `subject`, `monthly_goal`, `unit_load`, `chapters: Chapter[]`（完全置換）
+  - 備考: confirm_token は5分有効
+- books_delete:
+  - プレビュー: `book_id` → `requires_confirmation: true`, `preview.delete_rows`, `preview.range`, `confirm_token`
+  - 確定: `book_id`, `confirm_token` → `{ deleted_rows }`
+
+#### 自動ID付与（books.create）
+
+- 規則: `g` + サブコード(1–3文字) + 3桁連番（例: gEC062）
+- サブコード推定（subject/title から）:
+  - 英語: EB(文法)/EC(長文)/EK(解釈)/ET(語彙)/EW(英作文)/EL(リスニング)
+  - 数学: MB, 国語: JG/JO, 社会: JH/WH/GG/GE, 理科: CH/CHB/PH/PHB/BI/BIB/ESB
+- 同サブコード内で最大番号+1を採番。`id_prefix` 指定時はそれを優先。
+
+#### MCP からの実行例（プレビュー→確定）
+
+- 更新プレビュー: `books_update({"book_id":"gEC063","updates":{"title":"更新テスト（改）","unit_load":2}})`
+- 更新確定: `books_update({"book_id":"gEC063","confirm_token":"..."})`
+- 削除プレビュー: `books_delete({"book_id":"gEC063"})`
+- 削除確定: `books_delete({"book_id":"gEC063","confirm_token":"..."})`
 
 ## 💻 開発フロー（チートシート）
 
@@ -265,7 +358,7 @@ clasp open                    # エディタを開く
 - 変更→ビルド→push→新規デプロイ→curlで検証をワンコマンド化
 - スクリプト: `apps/gas/deploy_and_test.sh`
   - GET 例: `apps/gas/deploy_and_test.sh 'op=books.find&query=現代文レベル別'`
-  - POST例: `apps/gas/deploy_and_test.sh -X POST -d '{"op":"books.filter","where":{"教科":"数学"}}'`
+  - POST例: `apps/gas/deploy_and_test.sh -d '{"op":"books.find","query":"青チャート"}'`
   - 役割: `npm run build` → `clasp push` → `clasp deploy`（新規） → `curl -L`
   - 出力: `DEPLOY_ID/BASE_URL`（stderr）とJSONレスポンス（stdout）
 
@@ -274,7 +367,7 @@ clasp open                    # エディタを開く
 - スクリプト: `apps/gas/deploy_and_test.sh`
   - 役割: 最新HEADをpush→新規デプロイ作成→WebAppをcurlで叩く
   - GET例: `apps/gas/deploy_and_test.sh 'op=books.find&query=現代文レベル別'`
-  - POST例: `apps/gas/deploy_and_test.sh -X POST -d '{"op":"books.filter","where":{"教科":"数学"}}'`
+  - POST例: `apps/gas/deploy_and_test.sh -d '{"op":"books.find","query":"青チャート"}'`
   - 出力: `DEPLOY_ID` と APIのJSONレスポンス
 ```
 
@@ -287,10 +380,33 @@ curl -L "https://script.google.com/macros/s/<DEPLOY_ID>/exec?op=books.find&query
 ## 推奨: 上記スクリプトで一発実行（毎回これを使う）
 apps/gas/deploy_and_test.sh 'op=books.find&query=青チャート'
 
-# POSTテスト
-curl -L -X POST "https://script.google.com/macros/s/<DEPLOY_ID>/exec" \
+# POSTテスト（書き方の例）
+# どちらも可：a) -d だけ（推奨）、b) -X POST と -d を併用
+
+# a) -d だけでPOST（推奨）
+curl -L "https://script.google.com/macros/s/<DEPLOY_ID>/exec" \
   -H "Content-Type: application/json" \
-  -d '{"op":"books.filter","where":{"教科":"数学"}}'
+  -d '{"op":"books.find","query":"青チャート"}'
+
+# b) -X POST 指定でも可（スクリプト付属のヘルパー）
+apps/gas/deploy_and_test.sh -X POST -d '{"op":"books.find","query":"青チャート"}'
+
+## 出力のチェック（GET/POSTの実例）
+
+# 1) GET: books.get 複数ID（e.parametersを活用）
+apps/gas/deploy_and_test.sh 'op=books.get&book_ids=gMB017&book_ids=gMB018'
+
+# 2) POST: books.get 複数ID（JSONで配列）
+apps/gas/deploy_and_test.sh -X POST -d '{"op":"books.get","book_ids":["gMB017","gMB018"]}'
+
+# 3) POST: books.find（クエリ検索）
+apps/gas/deploy_and_test.sh -d '{"op":"books.find","query":"青チャート"}'
+
+# 4) POST: books.filter（条件フィルタ）
+apps/gas/deploy_and_test.sh -d '{"op":"books.filter","where":{"教科":"数学"},"limit":3}'
+
+# ヘッダ込みで確認したいときは -i を付与（ステータス/リダイレクト観測用）
+curl -i -L "https://script.google.com/macros/s/<DEPLOY_ID>/exec?op=ping"
 
 注意: スクリプトIDURLではなく、デプロイIDURLを使用。`-L`で302に追従。
 
@@ -358,31 +474,22 @@ docker run -p 8080:8080 -e EXEC_URL=$EXEC_URL cram-books-mcp
 ### Cloud Run デプロイ
 
 ```bash
-# 環境変数の設定
+# よく使う環境変数（scripts/gcloud_env.example にも保存）
 export PROJECT_ID="your-project-id"
 export REGION="asia-northeast1"
-export IMAGE="cram-books-mcp"
-export REPO="cram-repo"  # Artifact Registry リポジトリ
-export EXEC_URL="https://script.google.com/macros/s/.../exec"
+export SERVICE="cram-books-mcp"
+# EXEC_URL は apps/gas/.prod_deploy_id から自動生成されます（スクリプト内）。必要なら上書き:
+# export EXEC_URL="https://script.google.com/macros/s/<DEPLOY_ID>/exec"
 
-# Artifact Registry にイメージをプッシュ
-gcloud builds submit \
-  --tag "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$IMAGE:latest"
+# ソースデプロイ（Dockerfile利用）
+source scripts/gcloud_env.example  # または PROJECT_ID/REGION/SERVICE を export
+scripts/deploy_mcp.sh
 
-# Cloud Run にデプロイ
-gcloud run deploy "$IMAGE" \
-  --image "$REGION-docker.pkg.dev/$PROJECT_ID/$REPO/$IMAGE:latest" \
-  --region "$REGION" \
-  --allow-unauthenticated \
-  --set-env-vars EXEC_URL="$EXEC_URL" \
-  --timeout=300 \
-  --port=8080
+# 出力例
+# SERVICE_URL=https://<CloudRunService>.a.run.app
+# curl -i "$SERVICE_URL/mcp"   # 406=正常（Accept指定なし）
 
-# サービスURLを取得
-gcloud run services describe "$IMAGE" --region "$REGION" --format='value(status.url)'
-
-# ヘルスチェック（406が正常）
-curl -i "https://<ServiceURL>/mcp"
+補足: 過去の起動失敗（PORT未待受）は `uvicorn` 不足が原因。Dockerfile に `uvicorn`/`fastmcp` を追加し、`server.py` で `uvicorn.run(mcp.streamable_http_app(), host="0.0.0.0", port=$PORT)` 起動で解消。
 ```
 
 ## 🔌 Claude 接続
@@ -626,3 +733,43 @@ gcloud run logs read --service=cram-books-mcp
 - Cloud Run ヘルスチェック: `uvicorn.run()` で0.0.0.0:$PORTバインド
 - EXEC_URL設定: プレースホルダ混入に注意（実URLを設定）
 - Claude接続: `/mcp` エンドポイントを指定（406は正常）
+
+### POST 運用・極小サマリ（重要）
+- WebApp 公開: 「全員（匿名可）」＋固定デプロイID運用（`clasp deploy -i <ID>`）
+- OAuth 同意画面: テストモードの場合は実行ユーザーをテスターに追加（403 access_denied 回避）
+- 初回承認: エディタから `authorizeOnceEntry` 実行
+- curl: `-L + -d`（`-X POST` 強制しない）。302/303後のPOST維持を強制しない
+- MCP/HTTPクライアント: follow_redirects=True（httpx）
+
+### コード配置マップ（GAS）
+- ルーター: `apps/gas/src/index.ts`（doGet/doPost の薄いルーティング＋table.read。authorizeOnce はハンドラへ委譲）
+- 設定: `apps/gas/src/config.ts`
+- 共通: `apps/gas/src/lib/common.ts`（ok/ng/normalize/toNumberOrNull など）
+- ID規則: `apps/gas/src/lib/id_rules.ts`（サブコード推定・連番採番）
+- ハンドラ: `apps/gas/src/handlers/books.ts`
+  - 実装済み: `booksFind`, `booksGet`, `booksFilter`, `booksCreate`, `booksUpdate`, `booksDelete`
+  - ルーターは `apps/gas/src/index.ts`（doGet/doPost）。実体はすべてハンドラに集約。
+
+移設完了: `books.*` の実装はすべて `handlers/books.ts`。`index.ts` は薄いルーターのみ（将来は `students.*` など他ドメインも同様の分割方針）。
+
+### 仕様の要点（最新）
+- books.filter のデフォルト件数: limit 未指定＝無制限（全件）
+  - 以前の「条件なしは50件」のガードは撤廃。必要時のみ limit を指定。
+- 章の配置（create/update）:
+  - 親行に「第1章」を記載し、2章目以降を下の行へ追加。
+  - update のプレビューでは、子行（第2章以降）の増減数を `chapters.from_count/to_count` に表示。
+- 検索の正規化改善（books.find）:
+  - 「・／/＋+＆&」などの結合記号を除去して比較。
+  - 「漢字 と 漢字」は接続子「と」を除去して比較（例: 「軌跡と領域」≒「軌跡・領域」）。
+
+### 実行API版ツールについて（整理）
+- `books_find_exec` / `books_get_exec` は、Apps Script Execution API（scripts.run）経由の実験用エンドポイントでした。
+- 現在は MCP から「公開されていません」（ツール一覧に出ない）ため、通常は使用不可です。
+- 目的: WebApp POST の挙動検証や将来の認証付き実行のための保守用コード。ユーザー向けの最小構成維持のため非公開化しました。
+# 5) POST: books.create（作成→確認）
+apps/gas/deploy_and_test.sh -d '{"op":"books.create","id_prefix":"gTMP","title":"テスト本","subject":"数学","unit_load":2,"monthly_goal":"1日30分","chapters":[{"title":"第1章","range":{"start":1,"end":20}}]}'
+# 取得確認
+apps/gas/deploy_and_test.sh -d '{"op":"books.get","book_id":"gTMP001"}'
+
+# 6) POST: books.update（タイトル変更と章の置換）
+apps/gas/deploy_and_test.sh -d '{"op":"books.update","book_id":"gTMP001","updates":{"title":"テスト本（改）","chapters":[{"title":"改・第1章","range":{"start":1,"end":10}}]}}'
