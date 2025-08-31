@@ -295,17 +295,31 @@ async def books_filter(where: Any = None, contains: Any = None, limit: int | Non
 
 @mcp.tool()
 async def books_create(title: str, subject: str, unit_load: Any = None, monthly_goal: str | None = None, chapters: Any = None, id_prefix: str | None = None) -> dict:
-    """参考書を新規作成（GAS WebApp: books.create）。簡潔なルール:
+    """参考書を新規作成（GAS WebApp: books.create）。LLM向け・重要ルール:
 
-    - 数値は数値型で（unit_load: 2 など）。
-    - chapters は最終形の配列（完全指定）。最初の章は「親行」に入り、2章目以降は下行に追加。
-    - 章の最小形: {"title":"第1章","range":{"start":1,"end":20}}（numbering は任意）。
-    - 未指定の項目は作成されません。id は自動採番（id_prefix で接頭辞指定可）。
+    1) 章の配列は「最終形」を完全指定すること（追記ではない）。
+    2) numbering（番号の数え方）は必ず埋めること（空欄にしない）。代表例:
+       - 問題集/演習系 → "問"、語彙/単語集 → "No.", 英作文/講義系 → "講" or "Lesson" など。
+       - 迷ったら問題番号なら "問"、英単語なら "No." を推奨。
+    3) 章またぎの番号の扱い（range.start）:
+       - 原則は章ごとにリセット（各章の start=1）。
+       - 書籍が章をまたいで連番の場合のみ、次章の start=前章 end+1 に設定（例: 1章1-20 → 2章21-40）。
+    4) 最初の章はシートの「親行」に入り、第2章以降は下行に追加される（GAS側仕様）。
+    5) 数値は数値型で渡す（unit_load: 2 など）。id は自動採番（id_prefix で接頭辞指定可）。
 
-    例:
-    {"title":"テスト本","subject":"数学","unit_load":2,
-     "monthly_goal":"1日30分","chapters":[{"title":"第1章","range":{"start":1,"end":20}}]}
-    返り値例: { ok:true, data:{ id:"gMB123", created_rows: 2 } }
+    例（章ごとにリセット）:
+    {"title":"語彙テスト","subject":"英語","unit_load":1,
+     "chapters":[
+       {"title":"第1章", "range":{"start":1, "end":200}, "numbering":"No."},
+       {"title":"第2章", "range":{"start":1, "end":180}, "numbering":"No."}
+     ]}
+
+    例（章をまたいで連番）:
+    {"title":"標準問題精講","subject":"数学","unit_load":2,
+     "chapters":[
+       {"title":"第1章", "range":{"start":1,  "end":20}, "numbering":"問"},
+       {"title":"第2章", "range":{"start":21, "end":40}, "numbering":"問"}
+     ]}
     """
     payload: dict[str, Any] = {"op": "books.create", "title": title, "subject": subject}
     if unit_load is not None:
@@ -332,11 +346,13 @@ async def books_update(book_id: Any, updates: Any | None = None, confirm_token: 
     1) プレビュー: {book_id, updates} → 差分と confirm_token
     2) 確定: {book_id, confirm_token} → { updated }
 
-    入力の注意:
-    - updates.chapters は「完全置換」。配列は最終状態を渡す（追記ではない）。
-    - 章1は親行、章2以降は下行へ書き込み（create と同等）。
-    - 変更しない項目は updates に含めない（空文字での上書きを避ける）。
-    - 数値は数値型で（unit_load など）。
+    入力の注意（LLM向け）:
+    - updates.chapters は「完全置換」（追記ではない）。最終形の配列を渡す。
+    - numbering（番号の数え方）は必ず埋める（空欄禁止）。例: 問/No./講/Lesson など。
+    - 章またぎ番号の扱い: 原則リセット（各章 start=1）。連番が正しい書籍のみ carry-over（次章 start=前章 end+1）。
+    - 第1章は親行、2章目以降は下行へ書き込み（create と同等）。
+    - 変更しない項目は updates に含めない（空文字上書きを避ける）。
+    - 数値は数値型で渡す（unit_load 等）。
     """
     bid = _coerce_str(book_id, ("book_id","id"))
     if not bid:
@@ -445,8 +461,8 @@ async def tools_help() -> dict:
             "name": "books_create",
             "desc": "参考書の新規作成（自動ID付与）",
             "args": {"title":"string","subject":"string","unit_load":"number?","monthly_goal":"string?","chapters":"Chapter[]?","id_prefix":"string?"},
-            "example": {"title":"テスト本","subject":"数学","unit_load":2,"chapters":[{"title":"第1章","range":{"start":1,"end":20}}]},
-            "notes": "chaptersは最終形（完全指定）。第1章は親行、2章以降は下行。数値は数値型で。"
+            "example": {"title":"テスト本","subject":"数学","unit_load":2,"chapters":[{"title":"第1章","range":{"start":1,"end":20},"numbering":"問"}]},
+            "notes": "chaptersは最終形（完全指定）。numberingは必ず埋める（問/No./講など）。原則は章ごとにstart=1、連番書籍のみcarry。第1章は親行、2章以降は下行。数値は数値型で。"
         },
         {
             "name": "books_update",
@@ -454,7 +470,7 @@ async def tools_help() -> dict:
             "args": {"book_id":"string","updates":"object?","confirm_token":"string?"},
             "example_preview": {"book_id":"gMB017","updates":{"title":"（改）"}},
             "example_confirm": {"book_id":"gMB017","confirm_token":"…"},
-            "notes": "updates.chaptersは完全置換。章1は親行、章2以降は下行。未変更項目は含めない。"
+            "notes": "updates.chaptersは完全置換。numberingは必ず埋める。章またぎは原則リセット（start=1）、連番書籍のみcarry。章1は親行、章2以降は下行。未変更項目は含めない。"
         },
         {
             "name": "books_delete",
