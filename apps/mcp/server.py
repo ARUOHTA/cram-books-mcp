@@ -377,49 +377,28 @@ async def books_delete(book_id: Any, confirm_token: str | None = None) -> dict:
 
 @mcp.tool()
 async def books_list(limit: int | None = None) -> dict:
-    """参考書の親行だけを一覧します（ID/教科/参考書名）。
+    """参考書を簡易一覧（id/subject/title のみ）。
 
-    引数:
-    - limit: 返す上限件数（任意）。指定がなければ全件。
-
-    実装メモ:
-    - GAS の `table.read` を叩いて、ヘッダー行から列位置を特定。
-    - IDセルが空の行（章行）は除外。親行のみ採用。
-    - 返り値は { books:[{id,subject,title}], count } の簡易形。
+    実装: books.filter（条件なし）で全件を取得し、必要最小項目に整形。
+    - limit 指定時はその件数に切り詰め。
+    - 依存: WebAppの books.filter（POST）。table.read には依存しない。
     """
+    payload: dict[str, Any] = {"op": "books.filter"}
+    if isinstance(limit, int) and limit > 0:
+        payload["limit"] = limit
     try:
-        data = await _get({"op": "table.read"})
+        data = await _post(payload)
     except Exception as e:
-        return {"ok": False, "op": "books.list", "error": {"code": "HTTP_GET_ERROR", "message": str(e)}}
+        return {"ok": False, "op": "books.list", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
 
     if not isinstance(data, dict) or not data.get("ok"):
         return {"ok": False, "op": "books.list", "error": {"code": "UPSTREAM_ERROR", "message": str(data)}}
 
-    payload = data.get("data") or {}
-    headers: list[str] = payload.get("columns") or []
-    rows: list[list[Any]] = payload.get("rows") or []
-
-    idx_id = _pick_col(headers, ["参考書ID","ID","id"]) 
-    idx_title = _pick_col(headers, ["参考書名","タイトル","書名","title"]) 
-    idx_subject = _pick_col(headers, ["教科","科目","subject"]) 
-
-    if min(idx_id, idx_title, idx_subject) < 0:
-        return {"ok": False, "op": "books.list", "error": {"code": "BAD_HEADER", "message": "必要な列（参考書ID/参考書名/教科）が見つかりません"}}
-
-    books: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for r in rows:
-        bid = str(r[idx_id]).strip() if idx_id < len(r) else ""
-        if not bid or bid in seen:
-            continue
-        seen.add(bid)
-        title = str(r[idx_title]).strip() if idx_title < len(r) else ""
-        subject = str(r[idx_subject]).strip() if idx_subject < len(r) else ""
-        books.append({"id": bid, "subject": subject, "title": title})
-
-    if isinstance(limit, int) and limit > 0:
-        books = books[:limit]
-
+    items = ((data.get("data") or {}).get("books") or [])
+    books = [
+        {"id": b.get("id"), "subject": b.get("subject"), "title": b.get("title")}
+        for b in items if isinstance(b, dict)
+    ]
     return {"ok": True, "op": "books.list", "data": {"books": books, "count": len(books)}}
 
 
