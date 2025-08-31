@@ -2,7 +2,7 @@
  * 書籍ハンドラ群（find/get/filter/create/update/delete）
  * ルーター（index.ts）から呼ばれる純粋関数として実装。
  */
-import { CONFIG } from "../config";
+import { CONFIG, isFindDebugEnabled } from "../config";
 import { ApiResponse, ok, ng, normalize, toNumberOrNull } from "../lib/common";
 import { decidePrefix, nextIdForPrefix } from "../lib/id_rules";
 
@@ -219,7 +219,7 @@ export function booksFind(req: Record<string, any>): ApiResponse {
     }
 
     const sliced = candidates.slice(0, typeof limit === 'number' ? Math.min(limit, cutIndex) : cutIndex);
-    if (ENABLE_FIND_DEBUG) {
+    if (isFindDebugEnabled()) {
       try {
         console.log("[find.debug] query=", query, " topN=", Math.min(5, sliced.length));
         sliced.slice(0, 5).forEach((c, i) => console.log(`[${i+1}]`, c.book_id, c.title, c.score.toFixed(3), c.reason));

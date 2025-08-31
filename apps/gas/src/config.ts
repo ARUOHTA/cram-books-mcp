@@ -16,5 +16,9 @@ function getBool(key: string, fallback: boolean): boolean {
 }
 
 // 開発時の補助フラグ（デフォルトはfalse。必要に応じてScriptPropertiesで上書き）
-export const ENABLE_FIND_DEBUG = getBool("ENABLE_FIND_DEBUG", false);
-export const ENABLE_TABLE_READ = getBool("ENABLE_TABLE_READ", false);
+export function isFindDebugEnabled(): boolean {
+  return getBool("ENABLE_FIND_DEBUG", false);
+}
+export function isTableReadEnabled(): boolean {
+  return getBool("ENABLE_TABLE_READ", false);
+}

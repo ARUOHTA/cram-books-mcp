@@ -5,7 +5,7 @@
  */
 
 // 設定と共通ユーティリティ
-import { CONFIG, ENABLE_TABLE_READ } from "./config";
+import { CONFIG, isTableReadEnabled } from "./config";
 import { ApiResponse, ok, ng, createJsonResponse } from "./lib/common";
 // 書籍ハンドラ（実装本体）
 import {
@@ -52,7 +52,7 @@ export function doGet(e: GoogleAppsScript.Events.DoGet): GoogleAppsScript.Conten
         case "books.create": return booksCreateHandler(req);
         case "books.update": return booksUpdateHandler(req);
         case "books.delete": return booksDeleteHandler(req);
-        case "table.read":   return (ENABLE_TABLE_READ ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
+        case "table.read":   return (isTableReadEnabled() ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
         case "ping":         return ok("ping", { status: "ok", timestamp: new Date().toISOString() });
         default:              return ng(req.op || "unknown", "UNKNOWN_OP", "Unsupported op");
       }
@@ -77,7 +77,7 @@ export function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Cont
       case "books.create": return createJsonResponse(booksCreateHandler(req));
       case "books.update": return createJsonResponse(booksUpdateHandler(req));
       case "books.delete": return createJsonResponse(booksDeleteHandler(req));
-      case "table.read":   return createJsonResponse(ENABLE_TABLE_READ ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
+      case "table.read":   return createJsonResponse(isTableReadEnabled() ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
       default:               return createJsonResponse(ng(req.op || "unknown", "UNKNOWN_OP", "Unsupported op"));
     }
   } catch (err: any) {
