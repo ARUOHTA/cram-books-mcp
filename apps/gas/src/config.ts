@@ -2,6 +2,9 @@
 export const CONFIG = {
   BOOKS_FILE_ID: "1Z0mMUUchd9BT6r5dB6krHjPWETxOJo7pJuf2VrQ_Pvs",
   BOOKS_SHEET: "参考書マスター",
+  // 生徒マスター（指定がない場合は最初のシートを使用）
+  STUDENTS_FILE_ID: "1hLQe1TO6bfmdk3kvyV3RNkWmBuHhMfr9y01lIs7FVVI",
+  STUDENTS_SHEET: "生徒一覧",
 } as const;
 
 // ScriptProperties から真偽を取得（"true"/"1"/"on" を真と解釈）

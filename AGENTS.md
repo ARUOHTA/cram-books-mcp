@@ -308,6 +308,57 @@ uv run python server.py
 | `books_list` | 全参考書の親行を一覧 | `limit?: number` | `{ books:[{id,subject,title}], count }` |
 | `tools_help` | 公開ツールの使い方ガイド | なし | ツール一覧（引数/例/注意） |
 
+### 生徒マスター（Students）
+
+目的: 生徒マスター（スプレッドシート: STUDENTS_FILE_ID）をLLMから読み書きできる最小APIを提供し、今後スピードプランナー/面談メモとの連携に発展させる。
+
+#### GAS エンドポイント（students.*）
+- `students.list(limit?)`: 親行一覧（id/name/grade/planner_sheet_id/meeting_doc_id/tags と row原文）
+- `students.find(query, limit?)`: 氏名/IDの曖昧検索（単純 exact/partial）
+- `students.get(student_id | student_ids[])`: 単一/複数IDで取得
+- `students.filter(where?, contains?, limit?)`: where=完全一致 / contains=部分一致（見出し名はシート見出し。大文字/全角半角は吸収）
+- `students.create(record, id_prefix?)`: 末尾に1行追加（ID自動採番。既定接頭辞 's'、`id_prefix`で上書き可）。`record` は「見出し→値」の柔軟入力
+- `students.update(student_id, updates? | confirm_token?)`: 二段階（プレビューで差分/トークン→確定で上書き）
+- `students.delete(student_id, confirm_token?)`: 二段階（プレビュー→確定で該当行を削除）
+
+見出しのゆらぎ（例）
+- id: 生徒ID/ID/id、name: 氏名/名前/生徒名/name、grade: 学年/grade
+- planner_sheet_id: スピードプランナーID/PlannerSheetId/プランナーID、meeting_doc_id: 面談メモID/MeetingDocId/面談ドキュメントID
+
+#### MCP ツール（students_*）
+- `students_list(limit?, include_all?)`: 既定は「在塾のみ」。退塾・講師を含む全件は `include_all=true`。
+- `students_find(query, limit?, include_all?)`: 既定は在塾のみ（名前の contains）。`include_all=true` で全件。
+- `students_get(student_id | student_ids[])`: 単/複IDで取得（スコープ制限なし）。
+- `students_filter(where?, contains?, limit?, include_all?)`: 既定は在塾のみ（呼び出し側で Status が指定されていない場合に自動付与）。`include_all=true` で全件。
+- `students_create(record, id_prefix?)`, `students_update(...)`, `students_delete(...)`: GAS と同様の二段階/採番規則。
+
+実装メモ
+- 既定スコープ（在塾のみ）は MCP 側で実現（LLMに優しい既定値）。`include_all=true` 明示時にだけ全件に拡張。
+- 将来、スピードプランナー/面談メモには resolver API を追加予定（students_overview, planner_get, notes_get/summarize など）。
+
+### デプロイ運用（Cloud Run）
+
+トラブルを減らすコツ
+- PROJECT_ID の自動検出: `scripts/deploy_mcp.sh` は `PROJECT_ID` が未設定/placeholder の場合、`gcloud config get-value project` を自動採用。`source scripts/gcloud_env.example` で上書きしてしまってもフォールバック。
+- 406は正常: `/mcp` をブラウザ/curlで叩くと `406 Not Acceptable`（SSE必須）。MCPクライアントやInspectorではOK。
+- 302/303の追従: GAS WebApp はリダイレクトするため、クライアントは follow_redirects を有効化（httpxは True、curl は `-L`）。
+- EXEC_URL は `.prod_deploy_id` から自動解決（スクリプト内）。必要なら手動で `export EXEC_URL=.../exec`。
+- 起動失敗の調査: Cloud Run リビジョンのログで SyntaxError/ImportError を確認し、修正→再デプロイ。
+  - 例: `gcloud logging read --limit 200 "resource.type=cloud_run_revision AND resource.labels.service_name='cram-books-mcp'"`
+
+手順（最短）
+```
+# 推奨: current project に設定済みなら env不要
+scripts/deploy_mcp.sh
+
+# 明示したい場合
+PROJECT_ID="cram-books-mcp-0830" REGION="asia-northeast1" SERVICE="cram-books-mcp" scripts/deploy_mcp.sh
+
+# 確認（406ならOK）
+SERVICE_URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')
+curl -i "$SERVICE_URL/mcp"
+```
+
 ### LLM向けガイド: books.create / books.update の安全な使い方
 
 LLMから作成・更新を行う際に起きやすい入力ミスを防ぐため、以下のルールと手順に従ってください。

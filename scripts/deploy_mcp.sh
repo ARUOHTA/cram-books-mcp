@@ -9,7 +9,11 @@ set -euo pipefail
 ROOT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 cd "$ROOT_DIR"
 
-PROJECT_ID=${PROJECT_ID:-$(gcloud config get-value project --quiet 2>/dev/null || true)}
+_cfg_proj=$(gcloud config get-value project --quiet 2>/dev/null || true)
+# If PROJECT_ID is unset, empty, (unset), or placeholder, fall back to gcloud config
+if [[ -z "${PROJECT_ID-}" || "${PROJECT_ID-}" == "" || "${PROJECT_ID-}" == "(unset)" || "${PROJECT_ID-}" == "your-gcp-project-id" ]]; then
+  PROJECT_ID="${_cfg_proj}"
+fi
 if [[ -z "${PROJECT_ID}" || "${PROJECT_ID}" == "(unset)" ]]; then
   echo "PROJECT_ID is not set. Set env PROJECT_ID or run: gcloud config set project <ID>" >&2
   exit 2
@@ -44,4 +48,3 @@ echo "SERVICE_URL=${URL}"
 
 # ヘルスチェック（406が正常）
 curl -i -sS "${URL}/mcp" | head -n 20 || true
-
