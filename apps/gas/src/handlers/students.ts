@@ -250,3 +250,7 @@ export function studentsDelete(req: RowMap): ApiResponse {
   return ok("students.delete", { deleted: true });
 }
 
+/**
+ * students.ensure_ids: 生徒ID 列が空の行に、自動採番でIDを付与する（接頭辞は既定 's'、または id_prefix）。
+ */
+// （将来用）IDの自動整備ユーティリティは、運用ポリシー確定後に検討する
