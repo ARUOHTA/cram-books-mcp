@@ -308,6 +308,73 @@ uv run python server.py
 | `books_list` | 全参考書の親行を一覧 | `limit?: number` | `{ books:[{id,subject,title}], count }` |
 | `tools_help` | 公開ツールの使い方ガイド | なし | ツール一覧（引数/例/注意） |
 
+### LLM向けガイド: books.create / books.update の安全な使い方
+
+LLMから作成・更新を行う際に起きやすい入力ミスを防ぐため、以下のルールと手順に従ってください。
+
+- 基本ルール（共通）
+  - JSONのキーは指定どおり（小文字＋アンダースコア）を使用する。例: `unit_load`, `monthly_goal`, `chapters`。
+  - 数値は数値型で渡す（文字列ではなく）。例: `unit_load: 2`（× `"2"`）。
+  - 章は「完全置換」です。`updates.chapters` を渡すと既存の章構成は全て置き換わります。
+  - 章の配列は最小でも1章からを推奨（空配列も可だが、目的が「章の全消去」でない限り避ける）。
+  - 章の各要素は以下の最小形を守る:
+    - `{"title":"第1章","range":{"start":1,"end":20}}`（`numbering` は任意）
+  - 本シートでは「親行に第1章の情報」が入ります（以降の章は下の行に続きます）。
+
+- books.create（新規作成）
+  - 最小例（自動ID付与）
+    ```json
+    {
+      "op": "books.create",
+      "title": "テスト本",
+      "subject": "数学",
+      "unit_load": 2,
+      "monthly_goal": "1日30分",
+      "chapters": [
+        {"title": "第1章", "range": {"start": 1, "end": 20}}
+      ]
+    }
+    ```
+  - 任意で `id_prefix` を付与可能（例: `"gTMP"`）。未指定の場合は教科/題名から推定し、`gMB001` のように採番。
+  - 作成結果: `{ ok:true, data: { id: "gXXnnn", created_rows: N } }`。最初の章は親行に入り、以降は子行として追記されます。
+
+- books.update（二段階・安全）
+  - 手順:
+    1) プレビュー（差分確認）
+       ```json
+       {"op":"books.update","book_id":"gMB017","updates":{"title":"（改）","unit_load":3}}
+       ```
+       → `requires_confirmation: true` と `confirm_token` が返る。
+    2) 確定（トークン使用）
+       ```json
+       {"op":"books.update","book_id":"gMB017","confirm_token":"..."}
+       ```
+  - 章構成の置換（要注意）：
+    - 例：章を2→3章に差し替える
+      ```json
+      {"op":"books.update","book_id":"gMB017",
+       "updates": {"chapters": [
+          {"title":"第1章（改）","range":{"start":1,"end":10}},
+          {"title":"第2章（改）","range":{"start":11,"end":20}},
+          {"title":"第3章（新）","range":{"start":21,"end":30}}
+       ]}}
+      ```
+      - 親行に第1章、子行に第2章以降が入ります。
+      - プレビューでは「子行の増減」を `chapters.from_count/to_count` として提示します。
+
+- よくある誤りと回避策
+  - 誤: `updates` を渡さずに確定リクエストを行う → 正: まずプレビューで `confirm_token` を取得し、確定では `confirm_token` のみ送る。
+  - 誤: `book_ids`（複数）で update → 正: update は単一ID（`book_id`）。複数更新は個別に実行。
+  - 誤: 章の `range` を `{start:"1", end:"10"}` と文字列で渡す → 正: 数値で。
+  - 誤: `chapters` を差分（追記）と思って一部だけ渡す → 正: 完全置換。全章を配列に展開して送る。
+  - 誤: `title` を空文字で上書き → 正: 変更しないキーは `updates` に含めない（未指定）。
+
+- LLMプロンプト指針（推奨）
+  - 「提案→確認→実行」の順で、必ずプレビュー結果（差分/行数）をユーザーに提示して承認を得る。
+  - 章を編集する際は、「最終的な章一覧」を自然言語で整えた上で、JSONに落としてからプレビュー。
+  - 既存データの誤破壊を防ぐため、`updates` は最小限の差分だけに限定する（不要な空文字上書きを避ける）。
+
+
 #### MCP ツール詳細（二段階フロー）
 
 - books_update:
