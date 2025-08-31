@@ -2,7 +2,7 @@
  * 書籍ハンドラ群（find/get/filter/create/update/delete）
  * ルーター（index.ts）から呼ばれる純粋関数として実装。
  */
-import { CONFIG } from "../config";
+import { CONFIG, isFindDebugEnabled } from "../config";
 import { ApiResponse, ok, ng, normalize, toNumberOrNull } from "../lib/common";
 import { decidePrefix, nextIdForPrefix } from "../lib/id_rules";
 
@@ -219,6 +219,12 @@ export function booksFind(req: Record<string, any>): ApiResponse {
     }
 
     const sliced = candidates.slice(0, typeof limit === 'number' ? Math.min(limit, cutIndex) : cutIndex);
+    if (isFindDebugEnabled()) {
+      try {
+        console.log("[find.debug] query=", query, " topN=", Math.min(5, sliced.length));
+        sliced.slice(0, 5).forEach((c, i) => console.log(`[${i+1}]`, c.book_id, c.title, c.score.toFixed(3), c.reason));
+      } catch (_) {}
+    }
     const top = sliced[0] || null;
     const confidence = estimateConfidence(sliced);
 
@@ -238,14 +244,6 @@ export function booksGet(req: Record<string, any>): ApiResponse {
   if (!book_id && !listParam) return ng("books.get", "BAD_REQUEST", "book_id または book_ids が必要です");
 
   const norm = (s: any): string => (s ?? "").toString().trim().toLowerCase().normalize("NFKC");
-  const pickCol = (headers: string[], candidates: string[]): number => {
-    const Hn = headers.map(h => norm(h).replace(/\s+/g, ""));
-    for (const c of candidates) {
-      const i = Hn.indexOf(norm(c).replace(/\s+/g, ""));
-      if (i >= 0) return i;
-    }
-    return -1;
-  };
 
   const parseMonthlyGoal = (txt: any) => {
     if (!txt) return null;
@@ -577,15 +575,7 @@ export function booksCreate(req: Record<string, any>): ApiResponse {
     const values = sh.getDataRange().getValues();
     if (!values.length) return ng("books.create", "EMPTY", "シートが空です");
     const headers = values[0].map(String);
-    const norm = (s: any): string => (s ?? "").toString().trim().toLowerCase().normalize("NFKC");
-    const pickCol = (cands: string[]): number => {
-      const Hn = headers.map(h => norm(h).replace(/\s+/g, ""));
-      for (const c of cands) {
-        const i = Hn.indexOf(norm(c).replace(/\s+/g, ""));
-        if (i >= 0) return i;
-      }
-      return -1;
-    };
+    const pick = (cands: string[]): number => pickCol(headers, cands);
     const IDX = {
       id      : pickCol(["参考書ID", "ID", "id"]),
       title   : pickCol(["参考書名", "タイトル", "書名", "title"]),
@@ -673,16 +663,16 @@ export function booksUpdate(req: Record<string, any>): ApiResponse {
     };
 
     const IDX = {
-      id      : pickCol(["参考書ID", "ID", "id"]),
-      title   : pickCol(["参考書名", "タイトル", "書名", "title"]),
-      subject : pickCol(["教科", "科目", "subject"]),
-      goal    : pickCol(["月間目標", "goal"]),
-      unit    : pickCol(["単位当たり処理量", "単位処理量", "unit_load"]),
-      chapIdx : pickCol(["章立て"]),
-      chapName: pickCol(["章の名前", "章名"]),
-      chapBeg : pickCol(["章のはじめ", "開始", "begin", "start"]),
-      chapEnd : pickCol(["章の終わり", "終了", "end"]),
-      numStyle: pickCol(["番号の数え方", "番号", "numbering"])
+      id      : pick(["参考書ID", "ID", "id"]),
+      title   : pick(["参考書名", "タイトル", "書名", "title"]),
+      subject : pick(["教科", "科目", "subject"]),
+      goal    : pick(["月間目標", "goal"]),
+      unit    : pick(["単位当たり処理量", "単位処理量", "unit_load"]),
+      chapIdx : pick(["章立て"]),
+      chapName: pick(["章の名前", "章名"]),
+      chapBeg : pick(["章のはじめ", "開始", "begin", "start"]),
+      chapEnd : pick(["章の終わり", "終了", "end"]),
+      numStyle: pick(["番号の数え方", "番号", "numbering"])
     } as const;
 
     // book_id のブロック範囲を特定
@@ -828,7 +818,7 @@ export function booksDelete(req: Record<string, any>): ApiResponse {
       }
       return -1;
     };
-    const idCol = pickCol(["参考書ID", "ID", "id"]);
+    const idCol = pick(["参考書ID", "ID", "id"]);
 
     // 対象ブロック探索
     let parentRow = -1;
