@@ -4,6 +4,10 @@ import json
 from typing import Any
 
 # サーバ関数を直接呼ぶ（MCPサーバープロセス不要）。
+# リポジトリ直下を import path に追加
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
+
 from apps.mcp.server import (
     books_find,
     books_get,
@@ -96,4 +100,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-

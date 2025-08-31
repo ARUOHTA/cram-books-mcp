@@ -802,16 +802,7 @@ export function booksDelete(req: Record<string, any>): ApiResponse {
     if (!values.length) return ng("books.delete", "EMPTY", "シートが空です");
 
     const headers = values[0].map(String);
-    const norm = (s: any): string => (s ?? "").toString().trim().toLowerCase().normalize("NFKC");
-    const pickCol = (cands: string[]): number => {
-      const Hn = headers.map(h => norm(h).replace(/\s+/g, ""));
-      for (const c of cands) {
-        const i = Hn.indexOf(norm(c).replace(/\s+/g, ""));
-        if (i >= 0) return i;
-      }
-      return -1;
-    };
-    const idCol = pick(["参考書ID", "ID", "id"]);
+    const idCol = pickCol(headers, ["参考書ID", "ID", "id"]);
 
     // 対象ブロック探索
     let parentRow = -1;
