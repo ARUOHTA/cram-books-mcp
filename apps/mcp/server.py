@@ -298,10 +298,22 @@ async def books_filter(where: Any = None, contains: Any = None, limit: int | Non
 def _normkey(k: str) -> str: return k.strip().lower()
 
 @mcp.tool()
-async def students_list(limit: int | None = None) -> dict:
-    """生徒一覧（親行のみ、id/name/grade/linksの簡易形）。"""
-    try:
-        data = await _get({"op": "students.list", "limit": limit or 0})
+async def students_list(limit: int | None = None, include_all: bool | None = None) -> dict:
+    """生徒一覧（親行のみ、id/name/grade/linksの簡易形）。
+
+    既定は「在塾のみ」。退塾や講師等も含める場合は include_all=true を指定。
+    """
+    # 既定: 在塾のみ
+    if not include_all:
+        try:
+            data = await _post({"op": "students.filter", "where": {"Status": "在塾"}, "limit": limit or 0})
+        except Exception as e:
+            return {"ok": False, "op": "students.list", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
+    else:
+        try:
+            data = await _get({"op": "students.list", "limit": limit or 0})
+        except Exception as e:
+            return {"ok": False, "op": "students.list", "error": {"code": "HTTP_GET_ERROR", "message": str(e)}}
     except Exception as e:
         return {"ok": False, "op": "students.list", "error": {"code": "HTTP_GET_ERROR", "message": str(e)}}
     if not isinstance(data, dict) or not data.get("ok"):
@@ -317,13 +329,20 @@ async def students_list(limit: int | None = None) -> dict:
     return {"ok": True, "op": "students.list", "data": {"students": students, "count": len(students)}}
 
 @mcp.tool()
-async def students_find(query: Any, limit: int | None = 10) -> dict:
+async def students_find(query: Any, limit: int | None = 10, include_all: bool | None = None) -> dict:
     q = _coerce_str(query, ("query","q","text"))
     if not q: return {"ok": False, "op": "students.find", "error": {"code": "BAD_INPUT", "message": "query is required"}}
-    try:
-        return await _get({"op": "students.find", "query": q, "limit": limit or 0})
-    except Exception as e:
-        return {"ok": False, "op": "students.find", "error": {"code": "HTTP_GET_ERROR", "message": str(e)}}
+    # 既定: 在塾のみ（contains: 名前）
+    if not include_all:
+        try:
+            return await _post({"op": "students.filter", "where": {"Status": "在塾"}, "contains": {"名前": q}, "limit": limit or 0})
+        except Exception as e:
+            return {"ok": False, "op": "students.find", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
+    else:
+        try:
+            return await _get({"op": "students.find", "query": q, "limit": limit or 0})
+        except Exception as e:
+            return {"ok": False, "op": "students.find", "error": {"code": "HTTP_GET_ERROR", "message": str(e)}}
 
 @mcp.tool()
 async def students_get(student_id: Any = None, student_ids: Any = None) -> dict:
@@ -353,11 +372,17 @@ async def students_get(student_id: Any = None, student_ids: Any = None) -> dict:
         return {"ok": False, "op": "students.get", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
 
 @mcp.tool()
-async def students_filter(where: Any = None, contains: Any = None, limit: int | None = None) -> dict:
+async def students_filter(where: Any = None, contains: Any = None, limit: int | None = None, include_all: bool | None = None) -> dict:
     payload: dict[str, Any] = {"op": "students.filter"}
     if isinstance(where, dict): payload["where"] = where
     if isinstance(contains, dict): payload["contains"] = contains
     if isinstance(limit, int) and limit>0: payload["limit"] = limit
+    # 既定: 在塾のみ（呼び出し側で Status が指定されていなければ自動付与）
+    if not include_all:
+        w = payload.get("where") or {}
+        # 明示的に Status が指定されていない場合のみ上書き
+        if not isinstance(w, dict) or ("Status" not in w and "status" not in w):
+            payload["where"] = {**(w if isinstance(w, dict) else {}), "Status": "在塾"}
     try:
         return await _post(payload)
     except Exception as e:
