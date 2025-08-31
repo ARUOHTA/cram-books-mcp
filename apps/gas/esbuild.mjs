@@ -21,6 +21,13 @@ const buildOptions = {
 globalThis.doGet = Gas.doGet;
 globalThis.doPost = Gas.doPost;
 globalThis.authorizeOnce = Gas.authorizeOnce;
+// Dev test helpers (run from GAS editor)
+globalThis.testBooksFind = Gas.testBooksFind;
+globalThis.testBooksGetSingle = Gas.testBooksGetSingle;
+globalThis.testBooksGetMultiple = Gas.testBooksGetMultiple;
+globalThis.testBooksFilterMath = Gas.testBooksFilterMath;
+globalThis.testBooksCreateUpdateDelete = Gas.testBooksCreateUpdateDelete;
+globalThis.testBooksAll = Gas.testBooksAll;
 `,
   },
 };

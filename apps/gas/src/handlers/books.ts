@@ -5,6 +5,7 @@
 import { CONFIG, isFindDebugEnabled } from "../config";
 import { ApiResponse, ok, ng, normalize, toNumberOrNull } from "../lib/common";
 import { decidePrefix, nextIdForPrefix } from "../lib/id_rules";
+import { pickCol, parseMonthlyGoal } from "../lib/sheet_utils";
 
 export type ChapterInfo = {
   idx: number | null;
@@ -577,16 +578,16 @@ export function booksCreate(req: Record<string, any>): ApiResponse {
     const headers = values[0].map(String);
     const pick = (cands: string[]): number => pickCol(headers, cands);
     const IDX = {
-      id      : pickCol(["参考書ID", "ID", "id"]),
-      title   : pickCol(["参考書名", "タイトル", "書名", "title"]),
-      subject : pickCol(["教科", "科目", "subject"]),
-      goal    : pickCol(["月間目標", "goal"]),
-      unit    : pickCol(["単位当たり処理量", "単位処理量", "unit_load"]),
-      chapIdx : pickCol(["章立て"]),
-      chapName: pickCol(["章の名前", "章名"]),
-      chapBeg : pickCol(["章のはじめ", "開始", "begin", "start"]),
-      chapEnd : pickCol(["章の終わり", "終了", "end"]),
-      numStyle: pickCol(["番号の数え方", "番号", "numbering"]),
+      id      : pick(["参考書ID", "ID", "id"]),
+      title   : pick(["参考書名", "タイトル", "書名", "title"]),
+      subject : pick(["教科", "科目", "subject"]),
+      goal    : pick(["月間目標", "goal"]),
+      unit    : pick(["単位当たり処理量", "単位処理量", "unit_load"]),
+      chapIdx : pick(["章立て"]),
+      chapName: pick(["章の名前", "章名"]),
+      chapBeg : pick(["章のはじめ", "開始", "begin", "start"]),
+      chapEnd : pick(["章の終わり", "終了", "end"]),
+      numStyle: pick(["番号の数え方", "番号", "numbering"]),
     } as const;
 
     const subPrefix = decidePrefix(String(subject), String(title));
@@ -652,15 +653,7 @@ export function booksUpdate(req: Record<string, any>): ApiResponse {
     if (!values.length) return ng("books.update", "EMPTY", "シートが空です");
 
     const headers = values[0].map(String);
-    const norm = (s: any): string => (s ?? "").toString().trim().toLowerCase().normalize("NFKC");
-    const pickCol = (cands: string[]): number => {
-      const Hn = headers.map(h => norm(h).replace(/\s+/g, ""));
-      for (const c of cands) {
-        const i = Hn.indexOf(norm(c).replace(/\s+/g, ""));
-        if (i >= 0) return i;
-      }
-      return -1;
-    };
+    const pick = (cands: string[]): number => pickCol(headers, cands);
 
     const IDX = {
       id      : pick(["参考書ID", "ID", "id"]),
