@@ -314,8 +314,6 @@ async def students_list(limit: int | None = None, include_all: bool | None = Non
             data = await _get({"op": "students.list", "limit": limit or 0})
         except Exception as e:
             return {"ok": False, "op": "students.list", "error": {"code": "HTTP_GET_ERROR", "message": str(e)}}
-    except Exception as e:
-        return {"ok": False, "op": "students.list", "error": {"code": "HTTP_GET_ERROR", "message": str(e)}}
     if not isinstance(data, dict) or not data.get("ok"):
         return {"ok": False, "op": "students.list", "error": {"code": "UPSTREAM_ERROR", "message": str(data)}}
     items = ((data.get("data") or {}).get("students") or [])
