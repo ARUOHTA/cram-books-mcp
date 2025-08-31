@@ -8,7 +8,7 @@ set -euo pipefail
 #   ./deploy_and_test.sh 'op=books.find&query=現代文レベル別'
 #
 # Usage (POST with JSON body):
-#   ./deploy_and_test.sh -X POST -d '{"op":"books.filter","where":{"教科":"数学"}}'
+#   ./deploy_and_test.sh -d '{"op":"books.find","query":"青チャート"}'
 #
 # Notes:
 # - Requires: clasp logged in, Apps Script API enabled
@@ -58,13 +58,15 @@ echo "BASE_URL=${BASE}" >&2
 echo "[4/4] Hitting WebApp via curl" >&2
 # Normalize method to uppercase without requiring Bash 4+ (macOS compatibility)
 METHOD_UC=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
-if [ "$METHOD_UC" = "POST" ]; then
+if [ "$METHOD_UC" = "POST" ] || [ -n "$data_json" ]; then
   if [[ -z "$data_json" ]]; then
     echo "Missing -d '<json>' for POST." >&2
     exit 1
   fi
-  # Note: Google Apps Script may return 301/302/303. Ensure POST is preserved across redirects.
-  curl -sS -L --post301 --post302 --post303 -X POST "$BASE" \
+  # Important: With Apps Script Web Apps, a 302 redirect to script.googleusercontent.com occurs.
+  # Do NOT force POST across redirects (--post302/303). Let curl follow (-L) normally without -X,
+  # and set Content-Type explicitly so doPost(e) receives JSON.
+  curl -sS -L "$BASE" \
     -H 'Content-Type: application/json' \
     -d "$data_json"
 else
