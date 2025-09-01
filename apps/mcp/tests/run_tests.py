@@ -23,8 +23,7 @@ from apps.mcp.server import (
     planner_dates_confirm,
     planner_metrics_get,
     planner_plan_get,
-    planner_plan_propose,
-    planner_plan_confirm,
+    planner_plan_create,
     planner_monthly_filter,
     planner_plan_targets,
 )
@@ -144,7 +143,7 @@ async def main() -> None:
             assert plans.get("ok"), f"planner_plan_get failed: {plans}"
             print("plan_get: weeks=", len((plans.get("data") or {}).get("weeks") or []))
 
-            # Write preview only on empty cell; do not confirm
+            # Write small sample (create) on one empty cell, then revert
             target = None
             weeks = (plans.get("data") or {}).get("weeks") or []
             for wk in weeks:
@@ -156,12 +155,15 @@ async def main() -> None:
                     break
             if target:
                 wk_index, row = target
-                pp = await planner_plan_propose(week_index=int(wk_index), row=int(row), plan_text="テスト", overwrite=False, student_id=sid, spreadsheet_id=spreadsheet_id)
-                assert pp.get("ok"), f"planner_plan_propose failed: {pp}"
-                print("plan_propose ok (not confirming)")
+                cr = await planner_plan_create(items=[{"week_index": int(wk_index), "row": int(row), "plan_text": "テスト"}], student_id=sid, spreadsheet_id=spreadsheet_id)
+                assert cr.get("ok"), f"planner_plan_create failed: {cr}"
+                # revert
+                rv = await planner_plan_create(items=[{"week_index": int(wk_index), "row": int(row), "plan_text": "", "overwrite": True}], student_id=sid, spreadsheet_id=spreadsheet_id)
+                assert rv.get("ok"), f"planner_plan_create(revert) failed: {rv}"
+                print("plan_create single + revert ok")
             else:
                 print("no empty cell found for plan_propose; skipping write preview")
-        # targets & bulk write (safe round-trip)
+        # targets & bulk create (safe round-trip)
         tg = await planner_plan_targets(student_id=student_id, spreadsheet_id=spreadsheet_id)
         if tg.get("ok"):
             titems = (tg.get("data") or {}).get("targets") or []
@@ -171,19 +173,14 @@ async def main() -> None:
                 if len(pick) >= 2: break
                 pick.append({"week_index": it.get("week_index"), "row": it.get("row"), "plan_text": "テスト"})
             if pick:
-                pbulk = await planner_plan_propose(items=pick, student_id=student_id, spreadsheet_id=spreadsheet_id)
-                assert pbulk.get("ok"), f"propose(items) failed: {pbulk}"
-                btoken = pbulk["data"].get("confirm_token")
-                cbulk = await planner_plan_confirm(confirm_token=btoken)
-                assert cbulk.get("ok"), f"confirm(items) failed: {cbulk}"
+                cbulk = await planner_plan_create(items=pick, student_id=student_id, spreadsheet_id=spreadsheet_id)
+                assert cbulk.get("ok"), f"create(items) failed: {cbulk}"
                 # revert
                 ritems = [{"week_index": x["week_index"], "row": x["row"], "plan_text": "", "overwrite": True} for x in pick]
-                rp = await planner_plan_propose(items=ritems, student_id=student_id, spreadsheet_id=spreadsheet_id)
-                rtok = rp["data"].get("confirm_token")
-                rc = await planner_plan_confirm(confirm_token=rtok)
+                rc = await planner_plan_create(items=ritems, student_id=student_id, spreadsheet_id=spreadsheet_id)
                 assert rc.get("ok"), f"revert(items) failed: {rc}"
-                print("propose(items)/confirm + revert ok")
-        # Stress test: propose(items) many entries then revert (small N to avoid timeout)
+                print("create(items) + revert ok")
+        # Stress test: create(items) many entries then revert (small N to avoid timeout)
         if spreadsheet_id:
             tg = await planner_plan_targets(student_id=student_id, spreadsheet_id=spreadsheet_id)
             if tg.get("ok"):
@@ -200,15 +197,11 @@ async def main() -> None:
                 if pick:
                     import time
                     t0 = time.monotonic()
-                    p = await planner_plan_propose(items=pick, student_id=student_id, spreadsheet_id=spreadsheet_id)
-                    assert p.get("ok"), f"bulk propose(items) failed: {p}"
-                    tok = p["data"].get("confirm_token")
-                    c = await planner_plan_confirm(confirm_token=tok)
-                    assert c.get("ok"), f"bulk confirm failed: {c}"
+                    c = await planner_plan_create(items=pick, student_id=student_id, spreadsheet_id=spreadsheet_id)
+                    assert c.get("ok"), f"bulk create(items) failed: {c}"
                     t1 = time.monotonic()
                     # revert
-                    rp = await planner_plan_propose(items=[{**x, "plan_text":"", "overwrite": True} for x in pick], student_id=student_id, spreadsheet_id=spreadsheet_id)
-                    rc = await planner_plan_confirm(confirm_token=rp["data"].get("confirm_token"))
+                    rc = await planner_plan_create(items=[{**x, "plan_text":"", "overwrite": True} for x in pick], student_id=student_id, spreadsheet_id=spreadsheet_id)
                     assert rc.get("ok"), f"bulk revert failed: {rc}"
                     t2 = time.monotonic()
                     print(f"bulk(items) n={len(pick)} write={t1-t0:.2f}s revert={t2-t1:.2f}s total={t2-t0:.2f}s")
