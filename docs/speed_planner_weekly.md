@@ -65,9 +65,9 @@
 - 週間計画シートは「単一月」専用であり、同一シート内に複数の月コードが混在することはない前提。
 
 ## 読み取り API（案）
-### planner_get（読み取り）
+### planner_get（読み取り・metrics統合）
 - 入力: `student_id`（必須）。`month_code` は省略可（単一月前提のため A 列から自動判定）。
-- 動作: A4:A30 の displayValue から `<月コード>` と `<book_id>` を切り出し、4〜30 行を対象に各週（1〜5）の計画テキストと E/F/G の数値を収集。D1, L1, T1, AB1, AJ1 も取得。
+- 動作: A4:A30 の displayValue から `<月コード>` と `<book_id>` を切り出し、4〜30 行を対象に各週（1〜5）の計画テキストを収集。D1, L1, T1, AB1, AJ1 も取得。MCP 側で metrics（E/F/G）を週×行に統合して返す。
 - 返却（例）:
 ```json
 {
@@ -85,9 +85,9 @@
           "month_code": 258,
           "book_id": "gET007",      // `g` で始まらない場合もあり得る
           "plan_text": "第3章1節〜第3章4節",
-          "guideline_amount": 12.0,   // 目安処理量（小数処理ルールは要確認）
           "weekly_minutes": 180,
           "unit_load": 0.0667,
+          "guideline_amount": 12.0,
           "parsed": {
             "type": "range",
             "from": {"chapter": 3, "section": 1},
