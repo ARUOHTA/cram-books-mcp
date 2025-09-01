@@ -42,3 +42,4 @@
 - feat(mcp): planner_plan_confirm が一括トークンを単一GASリクエスト（items[]）へ集約し、GAS側のバッチ書込みを活用。
 - feat(mcp): 新ツール `planner_plan_create` を追加（提案/確定を統合）。週混在の一括作成を1コールで反映。応答に `guidance_digest` と `warnings` を同梱。
 - docs: README/AGENTS/tools_help を `planner_plan_create` 中心に更新。旧 propose/confirm は deprecated と明記。
+ - breaking(mcp docs): propose/confirm の実装は互換向けstubのみにし、ドキュメント上は完全廃止。今後は create に一本化。
