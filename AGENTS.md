@@ -87,10 +87,16 @@ MCP ツール（Weekly）
 3) `planner_plan_propose`（items で一括）→ effects（差分）を人間確認
 4) `planner_plan_confirm`（token）→ 一括確定
 
-プロンプトの運用ルール（要点）
-- 相談ポリシー: 次週で書籍の終端に到達/超過、前週との重複/飛び、目安量に対して過不足が大きい等は、勝手に決めずにユーザーへ確認する。
-- 週数遵守: `planner_dates_get` の week_count（4/5）に合わせて提案。存在しない週は作成しない。
-- 表記と上限: 52文字以内、範囲は「~」、複数は「,」や改行。非gIDはC/Dを尊重し無理に正規化しない。
+プロンプトの運用ルール（要点｜LLMは必ず守る）
+- 収集→計画→書込みの順を厳守:
+  1) ids_list / dates_get / plan_get(統合) で現状把握
+  2) 過去2–3ヶ月の実績（planner_monthly_filter）と TOC（books_get）を参照
+  3) targets → propose(items) → confirm で一括反映
+- 保守的な計画: 過去の実績ペースとTOCに沿い、guideline_amount を守る（過不足が大きい場合は分割/繰越を提案）
+- 相談ポリシー（Ask-when-uncertain）: 次週で終端、重複/飛び、過不足の大きな逸脱など不確実な場合は、必ずユーザーへ確認する
+- 終端到達時の表記: 終える週の末尾に「★完了！」。以降の週は「★相談」。ユーザーが方針を示したら即反映
+- 週数遵守: week_count にない週は作成しない
+- 表記と上限: 52文字以内、範囲は「~」、複数は「,」や改行。非gIDはC/Dの文言を尊重
 
 パフォーマンス
 - 単体で44セルを繰返すのではなく、`planner_plan_propose(items=[…])` で一括プレビュー→ `planner_plan_confirm` 一括確定に統一。呼び出し回数と誤操作を大幅削減。

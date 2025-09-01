@@ -1038,14 +1038,42 @@ async def planner_guidance() -> dict:
             "policy": {
                 "preconditions": ["A[row]非空","週間時間セル非空"],
                 "overwrite_default": False,
-                "max_chars": 52
+                "max_chars": 52,
+                "conservative_planning": True,
+                "ask_when_uncertain": True,
+                "finish_and_consult": {
+                    "finish_marker": "★完了！",
+                    "consult_marker": "★相談",
+                    "rule": "参考書の範囲を完了する週は末尾に★完了！を付与。以降の週は★相談にし、ユーザー方針が示されたら従う。"
+                }
             },
             "format": {
                 "range": "~ を用いる (No.951~1050, Lesson11~12)",
                 "multi": "カンマ/改行で複数範囲 (9~21,29~46)",
                 "freeform": "短く具体的に (演習・精読・音読)"
             },
-            "nongid": {"respect_title": True, "use_guideline_note": True}
+            "nongid": {"respect_title": True, "use_guideline_note": True},
+            "workflow": {
+                "collect": [
+                    "planner_ids_list で対象行(book_id/subject/title/guideline_note)を取得",
+                    "planner_dates_get で週数と開始日を把握(week_count=4/5)",
+                    "planner_plan_get で計画＋metrics(weekly_minutes/unit_load/guideline_amount)を取得",
+                    "過去2–3ヶ月の実績: planner_monthly_filter(year,month) を直近から複数回呼び、同書の過去実績を要約",
+                    "各書籍の目次・仕様: books_get(book_id) でTOC/numbering/単位を確認"
+                ],
+                "plan": [
+                    "原則は保守的: 過去ペースとTOCに沿い、guideline_amount を厳守",
+                    "連続性: 先週の末尾から次の開始へ。重複/飛びや過不足が大きい場合はユーザーに相談",
+                    "終端到達: 完了週に★完了！、以降は★相談（ユーザーが方針を出したら従う）",
+                    "週数遵守: week_count にない週は作成しない",
+                    "表記: 52文字以内、範囲は~、複数は, または改行、非gIDはC/Dの文言を尊重"
+                ],
+                "write": [
+                    "planner_plan_targets で 'A非空・週間時間非空・未入力' の候補を抽出",
+                    "planner_plan_propose(items=[…]) で一括プレビュー（effectsを人間確認）",
+                    "planner_plan_confirm(confirm_token) で一括確定"
+                ]
+            }
         }
     }
 
