@@ -27,8 +27,6 @@ from apps.mcp.server import (
     planner_plan_confirm,
     planner_monthly_filter,
     planner_plan_targets,
-    planner_plan_propose_bulk,
-    planner_plan_confirm_bulk,
 )
 
 

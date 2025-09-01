@@ -914,7 +914,7 @@ async def planner_monthly_filter(year: int | str, month: int | str, student_id: 
         return {"ok": False, "op": "planner.monthly.filter", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
 
 
-# ===== Weekly Planner: targets + bulk propose/confirm (MCP-only wrappers) =====
+# ===== Weekly Planner: targets（自動抽出） =====
 
 def _week_count_from_dates(dget: dict) -> int:
     ws = ((dget.get("data") or {}).get("week_starts")) if isinstance(dget, dict) else None
@@ -1002,65 +1002,6 @@ async def planner_plan_targets(student_id: Any = None, spreadsheet_id: Any = Non
     return {"ok": True, "op": "planner.plan.targets", "data": {"week_count": week_count, "targets": targets}}
 
 
-@mcp.tool()
-async def planner_plan_propose_bulk(items: Any, student_id: Any = None, spreadsheet_id: Any = None, overwrite: bool | None = None) -> dict:
-    """複数セルの一括プレビュー。返却トークンで confirm_bulk 可能。
-
-    items: [{week_index, plan_text, row?|book_id?, overwrite?}]
-    overwrite: 省略時は各itemの値を優先。未指定なら false。
-    """
-    if not isinstance(items, list) or not items:
-        return {"ok": False, "op": "planner.plan.propose_bulk", "error": {"code": "BAD_INPUT", "message": "items[] is required"}}
-    sid = _coerce_str(student_id, ("student_id","id"))
-    spid = _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id"))
-    child_tokens: list[str] = []
-    effects_all: list[dict] = []
-    warnings: list[str] = []
-    for it in items:
-        try:
-            wi = int(it.get("week_index"))
-            txt = str(it.get("plan_text") or "")
-        except Exception:
-            return {"ok": False, "op": "planner.plan.propose_bulk", "error": {"code": "BAD_ITEM", "message": str(it)}}
-        ow = it.get("overwrite")
-        if ow is None:
-            ow = bool(overwrite) if overwrite is not None else False
-        payload: dict[str, Any] = {"week_index": wi, "plan_text": txt, "overwrite": ow}
-        if it.get("row") is not None:
-            payload["row"] = it.get("row")
-        elif it.get("book_id"):
-            payload["book_id"] = it.get("book_id")
-        else:
-            return {"ok": False, "op": "planner.plan.propose_bulk", "error": {"code": "MISSING_TARGET", "message": "row or book_id required"}}
-        if sid: payload["student_id"] = sid
-        if spid: payload["spreadsheet_id"] = spid
-        prev = await planner_plan_propose(**payload)
-        if not prev.get("ok"):
-            warnings.append(f"propose failed for {payload}: {prev}")
-            continue
-        child_tokens.append(prev["data"].get("confirm_token"))
-        eff = (prev["data"] or {}).get("effects") or []
-        if isinstance(eff, list): effects_all.extend(eff)
-
-    if not child_tokens:
-        return {"ok": False, "op": "planner.plan.propose_bulk", "error": {"code": "NO_EFFECTS", "message": "."}, "data": {"effects": [], "warnings": warnings}}
-    bulk_token = _preview_put({"bulk_children": child_tokens})
-    return {"ok": True, "op": "planner.plan.propose_bulk", "data": {"confirm_token": bulk_token, "effects": effects_all, "warnings": warnings}}
-
-
-@mcp.tool()
-async def planner_plan_confirm_bulk(confirm_token: str) -> dict:
-    """一括プレビューで生成したトークンを確定します。"""
-    saved = _preview_pop(confirm_token)
-    if not saved or not isinstance(saved, dict):
-        return {"ok": False, "op": "planner.plan.confirm_bulk", "error": {"code": "CONFIRM_EXPIRED", "message": "invalid token"}}
-    children = saved.get("bulk_children") or []
-    results: list[dict] = []
-    for tok in children:
-        conf = await planner_plan_confirm(confirm_token=tok)
-        results.append({"ok": bool(conf.get("ok")), "data": conf.get("data"), "error": conf.get("error")})
-    ok_count = sum(1 for r in results if r.get("ok"))
-    return {"ok": True, "op": "planner.plan.confirm_bulk", "data": {"confirmed": ok_count, "results": results}}
 
 @mcp.tool()
 async def planner_guidance() -> dict:
