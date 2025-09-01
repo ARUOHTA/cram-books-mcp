@@ -656,14 +656,21 @@ async def tools_help() -> dict:
         },
         {
             "name": "planner_plan_propose",
-            "desc": "計画セルのプレビュー（overwrite規則と52文字上限を前提）。MUST: 実行前に planner_guidance を読むこと。propose 応答にも guidance_digest を同梱するため、必ず参照してから confirm すること。",
+            "desc": "[deprecated] 計画セルのプレビュー。新規は planner_plan_create を利用。MUST: 実行前に planner_guidance を読むこと。",
             "args": {"week_index": "1..5", "plan_text": "string", "overwrite": "bool?", "book_id": "string?", "row": "number?", "student_id": "string?", "spreadsheet_id": "string?"},
             "notes": "items:[] を渡すと一括プレビュー。week_index範囲外や52文字超は data.warnings に警告として返す（confirm時は失敗するため要修正）。",
         },
         {
             "name": "planner_plan_confirm",
-            "desc": "計画セルの確定（proposeトークン必須）。一括トークン時はGASにまとめてバッチ書込み。",
+            "desc": "[deprecated] 計画セルの確定。新規は planner_plan_create を利用。",
             "args": {"confirm_token": "string"},
+        },
+        {
+            "name": "planner_plan_create",
+            "desc": "計画セルの一括作成（高速・単発）。MUST: 実行前に planner_guidance を読むこと。",
+            "args": {"items": "{week_index,row|book_id,plan_text,overwrite?}[]", "student_id": "string?", "spreadsheet_id": "string?", "overwrite": "bool?"},
+            "returns": "{ updated, results[], warnings[], guidance_digest }",
+            "notes": "週混在OK。GAS側で列ごとに連続ブロックへバッチ書込み。前提/上限/overwrite規則は従来通り。"
         },
         {
             "name": "planner_guidance",
@@ -955,6 +962,79 @@ async def planner_plan_confirm(confirm_token: str) -> dict:
     saved["op"] = "planner.plan.set"
     res = await _post(saved)
     return res
+
+
+@mcp.tool()
+async def planner_plan_create(items: Any, student_id: Any = None, spreadsheet_id: Any = None, overwrite: bool | None = None) -> dict:
+    """計画セルを一括作成（高速・単発）。
+
+    MUST: 実行前に planner_guidance を読むこと。応答にも guidance_digest を同梱します。
+
+    引数:
+    - items: [{week_index, row|book_id, plan_text, overwrite?}, …]
+    - student_id | spreadsheet_id: いずれか（シート解決）
+    - overwrite: 省略時は false（空欄のみ）。items側で個別上書き可。
+
+    動作:
+    - 週混在OK。GAS側で列ごとに連続ブロックへまとめて setValues（高速）。
+    - バリデーション: 週数(week_count)・52文字超は warnings として返却（GAS側でも最終検証）。
+    - 返却: { updated, results[], warnings[], guidance_digest }
+    """
+    if not isinstance(items, list) or not items:
+        return {"ok": False, "op": "planner.plan.create", "error": {"code": "BAD_INPUT", "message": "items[] is required"}}
+    sid = _coerce_str(student_id, ("student_id","id"))
+    spid = _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id"))
+    payload: dict[str, Any] = {"op": "planner.plan.set", "items": []}
+    if sid: payload["student_id"] = sid
+    if spid: payload["spreadsheet_id"] = spid
+
+    # 週数（4/5）を取得して早期警告
+    week_count = 5
+    try:
+        d = await planner_dates_get(student_id=sid, spreadsheet_id=spid)
+        if isinstance(d, dict) and d.get("ok"):
+            week_count = _week_count_from_dates(d)
+    except Exception:
+        pass
+
+    warnings: list[str] = []
+    for it in items:
+        try:
+            wi = int(it.get("week_index"))
+            txt = str(it.get("plan_text") or "")
+        except Exception:
+            warnings.append(f"bad item: {it}")
+            continue
+        if wi < 1 or wi > week_count:
+            warnings.append(f"week_index out of range: {wi} (1..{week_count})")
+        if len(txt) > 52:
+            warnings.append(f"plan_text too long ({len(txt)} > 52). It will fail on write.")
+        out_it: dict[str, Any] = {
+            "week_index": wi,
+            "plan_text": txt,
+        }
+        if overwrite is not None and it.get("overwrite") is None:
+            out_it["overwrite"] = bool(overwrite)
+        if it.get("overwrite") is not None:
+            out_it["overwrite"] = bool(it.get("overwrite"))
+        if it.get("row") is not None:
+            out_it["row"] = it.get("row")
+        if it.get("book_id") is not None:
+            out_it["book_id"] = it.get("book_id")
+        payload["items"].append(out_it)
+
+    try:
+        res = await _post(payload)
+    except Exception as e:
+        return {"ok": False, "op": "planner.plan.create", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
+
+    gd = await planner_guidance()
+    out = {"ok": bool(res.get("ok")), "op": "planner.plan.create", "data": (res.get("data") or {})}
+    out["data"]["warnings"] = warnings
+    out["data"]["guidance_digest"] = (gd.get("data") or {})
+    if not res.get("ok"):
+        out["error"] = res.get("error")
+    return out
 
 @mcp.tool()
 async def planner_monthly_filter(year: int | str, month: int | str, student_id: Any = None, spreadsheet_id: Any = None) -> dict:

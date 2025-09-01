@@ -40,3 +40,5 @@
 - chore: 作業ブランチ `feat/llm-ux-improvements` を作成。
 - feat(gas): planner.plan.set に `items[]` を追加し、週列ごとに連続ブロックへバッチ書込み（単体互換維持）。
 - feat(mcp): planner_plan_confirm が一括トークンを単一GASリクエスト（items[]）へ集約し、GAS側のバッチ書込みを活用。
+- feat(mcp): 新ツール `planner_plan_create` を追加（提案/確定を統合）。週混在の一括作成を1コールで反映。応答に `guidance_digest` と `warnings` を同梱。
+- docs: README/AGENTS/tools_help を `planner_plan_create` 中心に更新。旧 propose/confirm は deprecated と明記。

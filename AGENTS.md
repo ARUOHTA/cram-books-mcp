@@ -88,8 +88,8 @@ MCP ツール（Weekly）
 1) `planner_plan_get` → 計画/metrics を一括取得（週数は `planner_dates_get` で week_count を把握）
 2) `planner_plan_targets` → 今月の「埋めるべきセル」を自動抽出
    - 各 target に `suggested_plan_text` が付与されるので、そのまま or 軽微修正して items を作成
-3) `planner_plan_propose`（items で一括）→ effects（差分）を人間確認（`data.warnings` に注意）
-4) `planner_plan_confirm`（token）→ 一括確定
+3) `planner_plan_create(items)` → 一括作成（高速）。`data.warnings` と `guidance_digest` を確認
+   - 旧: `planner_plan_propose/confirm` は後方互換のため残置（非推奨）
 
 プロンプトの運用ルール（要点｜LLMは必ず守る）
 - 収集→計画→書込みの順を厳守:
