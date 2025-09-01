@@ -34,6 +34,7 @@ import {
   plannerPlanGet as plannerPlanGetHandler,
   plannerPlanSet as plannerPlanSetHandler,
 } from "./handlers/planner";
+import { plannerMonthlyFilter as plannerMonthlyFilterHandler } from "./handlers/planner_monthly";
 
 /**
  * 手動承認（初回のみ実行）
@@ -83,6 +84,8 @@ export function doGet(e: GoogleAppsScript.Events.DoGet): GoogleAppsScript.Conten
         case "planner.metrics.get":return plannerMetricsGetHandler(req);
         case "planner.plan.get":   return plannerPlanGetHandler(req);
         case "planner.plan.set":   return plannerPlanSetHandler(req);
+        // planner (monthly)
+        case "planner.monthly.filter": return plannerMonthlyFilterHandler(req);
         case "table.read":      return (isTableReadEnabled() ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
         case "ping":         return ok("ping", { status: "ok", timestamp: new Date().toISOString() });
         default:              return ng(req.op || "unknown", "UNKNOWN_OP", "Unsupported op");
@@ -122,6 +125,8 @@ export function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Cont
       case "planner.metrics.get": return createJsonResponse(plannerMetricsGetHandler(req));
       case "planner.plan.get":    return createJsonResponse(plannerPlanGetHandler(req));
       case "planner.plan.set":    return createJsonResponse(plannerPlanSetHandler(req));
+      // planner (monthly)
+      case "planner.monthly.filter": return createJsonResponse(plannerMonthlyFilterHandler(req));
       case "table.read":      return createJsonResponse(isTableReadEnabled() ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
       default:               return createJsonResponse(ng(req.op || "unknown", "UNKNOWN_OP", "Unsupported op"));
     }

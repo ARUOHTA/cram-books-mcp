@@ -25,6 +25,7 @@ from apps.mcp.server import (
     planner_plan_get,
     planner_plan_propose,
     planner_plan_confirm,
+    planner_monthly_filter,
 )
 
 
@@ -159,6 +160,14 @@ async def main() -> None:
                 print("plan_propose ok (not confirming)")
             else:
                 print("no empty cell found for plan_propose; skipping write preview")
+        # Monthly (if SPREADSHEET_ID provided)
+        if spreadsheet_id:
+            ym_year = int(os.environ.get("YEAR", "25"))
+            ym_month = int(os.environ.get("MONTH", "8"))
+            mon = await planner_monthly_filter(year=ym_year, month=ym_month, spreadsheet_id=spreadsheet_id)
+            assert mon.get("ok"), f"planner_monthly_filter failed: {mon}"
+            cnt = (mon.get("data") or {}).get("count")
+            print(f"monthly_filter y={ym_year} m={ym_month} count=", cnt)
     else:
         print("(planner tests skipped: set STUDENT_ID or SPREADSHEET_ID to enable)")
 
