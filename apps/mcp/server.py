@@ -656,13 +656,13 @@ async def tools_help() -> dict:
         },
         {
             "name": "planner_plan_propose",
-            "desc": "計画セルのプレビュー（overwrite規則と52文字上限を前提）",
+            "desc": "計画セルのプレビュー（overwrite規則と52文字上限を前提）。MUST: 実行前に planner_guidance を読むこと。propose 応答にも guidance_digest を同梱するため、必ず参照してから confirm すること。",
             "args": {"week_index": "1..5", "plan_text": "string", "overwrite": "bool?", "book_id": "string?", "row": "number?", "student_id": "string?", "spreadsheet_id": "string?"},
             "notes": "items:[] を渡すと一括プレビュー。week_index範囲外や52文字超は data.warnings に警告として返す（confirm時は失敗するため要修正）。",
         },
         {
             "name": "planner_plan_confirm",
-            "desc": "計画セルの確定（proposeトークン必須）",
+            "desc": "計画セルの確定（proposeトークン必須）。一括トークン時はGASにまとめてバッチ書込み。",
             "args": {"confirm_token": "string"},
         },
         {
@@ -880,9 +880,12 @@ async def planner_plan_propose(week_index: int | None = None, plan_text: str | N
             eff = (res["data"] or {}).get("effects") or []
             if isinstance(eff, list): effects_all.extend(eff)
         if not child_tokens:
-            return {"ok": False, "op": "planner.plan.propose", "error": {"code": "NO_EFFECTS", "message": "no valid items"}, "data": {"effects": [], "warnings": warnings}}
+            # 併せてガイダンスを提示
+            gd = await planner_guidance()
+            return {"ok": False, "op": "planner.plan.propose", "error": {"code": "NO_EFFECTS", "message": "no valid items"}, "data": {"effects": [], "warnings": warnings, "guidance_digest": (gd.get("data") or {})}}
         bulk_token = _preview_put({"bulk_children": child_tokens})
-        return {"ok": True, "op": "planner.plan.propose", "data": {"confirm_token": bulk_token, "effects": effects_all, "warnings": warnings}}
+        gd = await planner_guidance()
+        return {"ok": True, "op": "planner.plan.propose", "data": {"confirm_token": bulk_token, "effects": effects_all, "warnings": warnings, "guidance_digest": (gd.get("data") or {})}}
 
     # 単体（従来互換）
     if week_index is None or plan_text is None:
@@ -906,6 +909,8 @@ async def planner_plan_propose(week_index: int | None = None, plan_text: str | N
     data = res.get("data") or {}
     if single_warnings:
         data["warnings"] = single_warnings
+    gd = await planner_guidance()
+    data["guidance_digest"] = (gd.get("data") or {})
     return {"ok": True, "op": "planner.plan.propose", "data": data}
 
 @mcp.tool()

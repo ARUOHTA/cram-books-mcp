@@ -26,6 +26,7 @@ LLM と Google スプレッドシート（参考書マスター／生徒マス�
   - 計画の読取（plan_get）と目安（週時間・単位処理量・目安処理量）を“統合で”取得
   - 今月の“埋めるべきセル”の自動抽出（plan_targets）＋ TOCに基づく簡易サジェスト（suggested_plan_text/numbering_symbol）
   - 計画の一括プレビュー→一括確定（plan_propose(items[])→plan_confirm）。範囲外週や52文字超は propose 応答の data.warnings で早期通知
+  - MUST: propose 実行前に planner_guidance を参照（propose 応答にも guidance_digest を同梱）
   - 確定はGAS側でバッチ書込み（`planner.plan.set` の `items[]` 最適化）
 - スピードプランナー（月間管理）
   - 指定年月（B=年、C=月）の実績行を構造化して取得（planner_monthly_filter）

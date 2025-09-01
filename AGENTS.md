@@ -77,6 +77,7 @@ MCP ツール（Weekly）
   - 複数: `{items:[{week_index, row|book_id, plan_text, overwrite?}, …], overwrite?}`
   - 戻り: `confirm_token` は単体・一括どちらにも対応。confirm は単体/一括を自動判別し、`{confirmed, results[]}` を返却。
   - propose 早期警告: `data.warnings` に `week_index` 範囲外や `plan_text` 52文字超などを通知（confirm時は失敗）。
+  - MUST: propose 実行前に `planner_guidance` を読む。propose の応答にも `guidance_digest` を同梱するため、必ず参照のうえ confirm する。
 
 バリデーションと安全策
 - 書込前提: A[row]非空 かつ 対象週の「週間時間」セル非空。上記を満たさないセルはtargetsに出さず、propose時も弾く。

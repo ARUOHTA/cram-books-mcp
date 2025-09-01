@@ -38,3 +38,5 @@
 - feat(mcp): planner_plan_targets を強化。Books TOCから `numbering_symbol`/`max_end` を把握し、`suggested_plan_text` を付与（prev_range_hint と guideline_amount から推定）。`end_of_book` を同梱。
 - docs: tools_help/README/AGENTS を更新（targetsのサジェスト/ proposeのwarnings を明記）。
 - chore: 作業ブランチ `feat/llm-ux-improvements` を作成。
+- feat(gas): planner.plan.set に `items[]` を追加し、週列ごとに連続ブロックへバッチ書込み（単体互換維持）。
+- feat(mcp): planner_plan_confirm が一括トークンを単一GASリクエスト（items[]）へ集約し、GAS側のバッチ書込みを活用。
