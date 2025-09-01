@@ -916,15 +916,34 @@ async def planner_plan_confirm(confirm_token: str) -> dict:
     # 一括トークン
     if isinstance(saved, dict) and saved.get("bulk_children"):
         children = saved.get("bulk_children") or []
-        results: list[dict] = []
+        items: list[dict] = []
+        student_id = None
+        spreadsheet_id = None
         for tok in children:
             pay = _preview_pop(tok)
             if not pay:
-                results.append({"ok": False, "error": {"code": "CHILD_EXPIRED"}})
                 continue
-            pay["op"] = "planner.plan.set"
-            res = await _post(pay)
-            results.append({"ok": bool(res.get("ok")), "data": res.get("data"), "error": res.get("error")})
+            # 共通ID（すべて同一前提）
+            if not student_id: student_id = pay.get("student_id")
+            if not spreadsheet_id: spreadsheet_id = pay.get("spreadsheet_id")
+            items.append({
+                "week_index": pay.get("week_index"),
+                "plan_text": pay.get("plan_text"),
+                "overwrite": pay.get("overwrite"),
+                **({"row": pay.get("row")} if pay.get("row") else {}),
+                **({"book_id": pay.get("book_id")} if pay.get("book_id") else {}),
+            })
+        if not items:
+            return {"ok": False, "op": "planner.plan.confirm", "error": {"code": "NO_ITEMS", "message": "no valid child tokens"}}
+        payload: dict[str, Any] = {"op": "planner.plan.set", "items": items}
+        if student_id: payload["student_id"] = student_id
+        if spreadsheet_id: payload["spreadsheet_id"] = spreadsheet_id
+        res = await _post(payload)
+        # 期待されるGAS応答: { updated: true, results: [{ok,cell?,error?}, ...] }
+        if not isinstance(res, dict) or not res.get("ok"):
+            return {"ok": False, "op": "planner.plan.confirm", "error": {"code": "UPSTREAM", "message": str(res)}}
+        data = res.get("data") or {}
+        results = (data.get("results") or [])
         ok_count = sum(1 for r in results if r.get("ok"))
         return {"ok": True, "op": "planner.plan.confirm", "data": {"confirmed": ok_count, "results": results}}
     # 単体
