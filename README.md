@@ -1,153 +1,154 @@
 # CRAM Books MCP
 
-学習塾で運用している「参考書マスター（Google スプレッドシート）」を、LLM から安全に「提案→承認→実行」で操作するためのモノレポです。GAS（Google Apps Script）で Web API を提供し、MCP（Model Context Protocol）サーバーからHTTPで呼び出します。
+LLM と Google スプレッドシート（参考書マスター／生徒マスター／スピードプランナー）を安全に接続するためのモノレポです。GAS（Google Apps Script）がWeb APIを提供し、MCP（Model Context Protocol）サーバーがHTTP/SSE経由で取りまとめます。
 
 ```
-[LLM (Claude 等)]
-      │  (Remote MCP/HTTP)
-      ▼
-[Cloud Run 上の MCP サーバー]  ←(ENV)→  EXEC_URL
-      │  (HTTP GET/POST, JSON)
-      ▼
-[Apps Script(GAS) WebApp] ──────────→ [Google スプレッドシート(参考書マスター)]
+[ユーザー/Claude]
+   │  (MCP over HTTP/SSE)
+   ▼
+[Cloud Run: MCP Server]  ←(ENV)→  EXEC_URL
+   │  (HTTP GET/POST, JSON)
+   ▼
+[Apps Script (WebApp)] ──→ [Google Sheets: Books / Students / Planner]
 ```
 
-## 主な機能
-- 参考書の検索・取得・絞り込み・新規作成・更新・削除
-- 複数IDの GET（GETクエリの配列対応）
-- 更新/削除はプレビュー→承認（トークン）→確定の二段階
-- 章配置の統一仕様（親行に第1章、続きは下行）
-- 検索は双方向カバレッジ（Q⊆T, T⊆Q + IDF）で表記ゆれに強い
-- MCP 側にツール一覧ヘルプ（tools_help）、軽量一覧（books_list）
+---
 
-## ディレクトリ構成
+## 1. 利用者向け（LLMで使う）
+
+### 1.1 何ができる？
+- 参考書マスター（Books）
+  - 曖昧検索（books_find）、詳細取得（books_get）、条件絞り込み（books_filter）
+  - 新規作成・更新・削除はすべてプレビュー→承認→確定の二段階
+- 生徒マスター（Students）
+  - 在塾が既定の list/find/get/filter と、create/update/delete
+- スピードプランナー（週間管理）
+  - 計画の読取（plan_get）と目安（週時間・単位処理量・目安処理量）を“統合で”取得
+  - 今月の“埋めるべきセル”の自動抽出（plan_targets）
+  - 計画の一括プレビュー→一括確定（plan_propose(items[])→plan_confirm）
+- スピードプランナー（月間管理）
+  - 指定年月（B=年、C=月）の実績行を構造化して取得（planner_monthly_filter）
+
+### 1.2 週間管理の最短フロー（まとめて作る）
+1) 現状把握: `planner_plan_get(student_id=… or spreadsheet_id=…)`
+   - weeks[].items[] に `plan_text` と `weekly_minutes / unit_load / guideline_amount` が入っています
+2) 書込み候補の自動抽出: `planner_plan_targets(…)`
+   - A非空・週間時間非空・未入力のみが targets[] に出ます
+3) 一括プレビュー→承認: `planner_plan_propose(items=[…])` → `planner_plan_confirm(confirm_token)`
+   - items は `{week_index, row|book_id, plan_text, overwrite?}` の配列
+
+> 例）「二週目から五週目までまとめて作って」
+> 1) targets で週2–5の候補だけ拾う → 2) items を組み立て `plan_propose(items)` → 3) effects（差分）を確認 → 4) `plan_confirm(token)`
+
+### 1.3 計画作成の原則（LLMが必ず守る）
+- 収集→計画→書込みの順
+  1) ids_list / dates_get / plan_get（統合）で今月の状況を把握
+  2) 過去2–3ヶ月の実績（planner_monthly_filter）と TOC（books_get）を参照
+  3) plan_targets → plan_propose(items) → plan_confirm で一括反映
+- 保守的に: 過去の実績ペースと目次構成に沿い、guideline_amount を守る
+- 相談ポリシー（Ask-when-uncertain）: 終端到達、重複/飛び、過不足の大きな逸脱など不確実な場合は、勝手に進めずユーザーへ確認
+- 終端表記: 終える週の末尾に「★完了！」、以降の週は「★相談」。ユーザー方針が出たら従う
+- 週数遵守: `week_count`（4/5）にない週は作成しない
+- 表記と上限: 52文字以内、範囲は「~」、複数は「,」または改行。非gIDはC/Dの文言を尊重
+
+> これらの原則は、MCPツール `planner_guidance` にも常に含まれています。会話冒頭で参照することで、意図どおりの計画が得やすくなります。
+
+---
+
+## 2. 開発者向け（セットアップ/運用/テスト）
+
+### 2.1 ディレクトリ構成
 ```
-cram-books-mcp/
-├── apps/
-│   ├── gas/                    # Google Apps Script (TypeScript → esbuild → dist)
-│   │   ├── src/
-│   │   │   ├── index.ts       # doGet/doPost の薄いルーター
-│   │   │   ├── handlers/books.ts
-│   │   │   ├── lib/{common,id_rules,sheet_utils}.ts
-│   │   │   └── tests/dev_tests.ts
-│   │   └── dist/               # GAS へ push される成果物（自動生成）
-│   └── mcp/                    # MCP サーバー (Python, FastMCP)
-│       ├── server.py
-│       ├── tests/run_tests.py  # MCP E2E テスト（EXEC_URL を使用）
-│       └── Dockerfile
-├── scripts/
-│   ├── deploy_mcp.sh           # Cloud Run へデプロイ
-│   └── gcloud_env.example      # PROJECT_ID, REGION, SERVICE 例
-├── AGENTS.md, PROGRESS.md
-└── README.md（本ファイル）
+apps/
+ ├─ gas/        # GAS (TypeScript → esbuild → dist)
+ │   ├─ src/    # ルーター/ハンドラ/ユーティリティ/テスト
+ │   └─ dist/   # clasp push 対象（生成物）
+ └─ mcp/        # MCP Server (Python FastMCP)
+     ├─ server.py
+     ├─ tests/run_tests.py
+     └─ Dockerfile
+scripts/
+ ├─ deploy_mcp.sh         # Cloud Run デプロイ
+ └─ gcloud_env.example    # PROJECT_ID/REGION/SERVICE 例
+docs/
+ ├─ speed_planner_weekly.md
+ └─ planner_monthly.md
 ```
 
-## セットアップ（最短）
-事前: Node.js 18+, Python 3.12+, `uv`, Google アカウント, GCP, clasp
+### 2.2 依存環境
+- Node.js 18+ / npm
+- Python 3.12+ / `uv`
+- @google/clasp（GAS）、gcloud（Cloud Run）
 
-### 1) GAS（WebApp）
+### 2.3 GAS（WebApp）
 ```
 cd apps/gas
 npm install
 npm run clasp:login
 
-# 既存 WebApp を dist を正として clone/pull
+# 既存WebAppを dist を正として clone/pull する場合:
 clasp clone <SCRIPT_ID> --rootDir dist
 
-# スクリプトID/スプレッドシートIDを設定
-# apps/gas/.clasp*.json, src/config.ts の BOOKS_FILE_ID
-
-# ビルド→push→デプロイ
+# ビルド→push→デプロイ（固定デプロイID運用推奨）
 npm run build
 clasp push
-clasp deploy -d prod
-
-# WebApp 公開: 実行ユーザー=自分 / アクセス=全員（匿名）
+clasp deployments            # 既存ID確認
+clasp deploy -i <DEPLOY_ID>  # 既存IDへ再デプロイ
 ```
+- WebApp 公開: 実行ユーザー=自分 / アクセス=全員（匿名）
+- ENV は ScriptProperties を併用（必要時）
 
-### 2) MCP（Cloud Run）
+### 2.4 MCP（Cloud Run）
 ```
+# ローカル
 cd apps/mcp
+uv run python server.py   # http://localhost:8080/mcp
 
-# （ローカル実行）
-uv run python server.py  # http://localhost:8080/mcp
-
-# （Cloud Run デプロイ）
+# デプロイ（EXEC_URLは apps/gas/.prod_deploy_id を参照）
 cd ../..
-source scripts/gcloud_env.example  # PROJECT_ID/REGION/SERVICE を設定
-scripts/deploy_mcp.sh              # EXEC_URL は apps/gas/.prod_deploy_id を参照
+source scripts/gcloud_env.example
+scripts/deploy_mcp.sh
 ```
+- ENV: `EXEC_URL`（必須, GAS WebAppの/exec）/ `SCRIPT_ID`（任意: Execution API 実験用）
 
-## 環境変数（MCP）
-- EXEC_URL（必須）: GAS WebApp のデプロイURL（/exec）
-- SCRIPT_ID（任意/実験）: Execution API を使う場合のみ
+### 2.5 テスト
+- GAS（GASエディタ）
+  - testBooksAll / testPlannerReadSample / testPlannerBulkSpeedGAS（週2の空欄10件程度を write→revert）
+- MCP（E2E; EXEC_URL 必須）
+  - `uv run python apps/mcp/tests/run_tests.py`
+  - SPREADSHEET_ID を与えれば planner 系も実行（まとめ処理の所要時間をログ）
 
-## MCP ツール（抜粋）
-- books_find(query) 検索（曖昧）
-- books_get(book_id | book_ids[]) 詳細取得（単/複）
-- books_filter(where?, contains?, limit?) 条件絞り込み（書籍単位）
-- books_create(title, subject, unit_load?, monthly_goal?, chapters[], id_prefix?) 新規作成
-- books_update(book_id, updates? | confirm_token?) 更新（プレビュー→確定）
-- books_delete(book_id, confirm_token?) 削除（プレビュー→確定）
-- books_list(limit?) 親行一覧（id/subject/title のみ）
-- tools_help() 公開ツールの簡易ヘルプ
+### 2.6 Claude / ChatGPT
+- Claude: 本mainの多機能MCPをそのまま利用（任意ツール呼び出し）
+- ChatGPT: コネクタの仕様上 `search`/`fetch` のみ。別ブランチで最小I/Fを用意（詳細は AGENTS.md の「ChatGPT コネクタ対応」）
 
-### Planner（週間管理）
+### 2.7 トラブルシューティング
+- 302/303: WebAppのリダイレクト特性。HTTPクライアントは follow_redirects を有効化
+- /mcp 直叩きは 406: SSE必須の正常応答
+- `EXEC_URL is not set`: Cloud Run の環境変数に設定
+- pickCol エラー: GAS 側をビルド→push→再デプロイ
+
+---
+
+## 3. 主なMCPツール（抜粋）
+
+### 3.1 Books
+- books_find(query) / books_get(book_id|book_ids[]) / books_filter / books_create / books_update / books_delete / books_list
+
+### 3.2 Students
+- students_list/find/get/filter/create/update/delete
+
+### 3.3 Planner（週間管理）
 - planner_ids_list / planner_dates_get|propose|confirm / planner_plan_get|propose|confirm / planner_plan_targets / planner_guidance
-  - plan_get は metrics（weekly_minutes/unit_load/guideline_amount）を同梱
-  - plan_propose は単体/複数（items[]）の両方に対応、confirm は単体/一括を自動判別
-  - 書込制約: A非空・週間時間非空・最大52文字、overwrite=falseが既定
+  - plan_get は metrics 同梱、plan_propose は items[] 一括対応、plan_confirm は単体/一括を自動判別
 
-注意（create/update; LLM向け）
-- chapters は「最終形」を完全指定（追記ではない）
-- numbering（番号の数え方）は必ず埋める（空欄禁止）
-  - 例: 問/No./講/Lesson など。迷ったら問題番号=「問」／単語=「No.」
-- 章またぎの番号の扱い:
-  - 原則リセット（各章 start=1）
-  - 書籍が連番なら carry-over（次章 start=前章 end+1）
-- 第1章は親行、2章以降は下行（GAS 仕様）
+### 3.4 Planner（月間管理）
+- planner_monthly_filter(year, month, student_id?|spreadsheet_id?)
+  - B=年(下2桁)/C=月(1..12) で実績を抽出
 
-## GAS API（内部仕様）
-- GET: op=books.find|books.get|health ほか
-- GET（配列）: op=books.get&book_ids=ID&book_ids=ID...
-- POST: JSON の op に応じて実行（books.*）
+---
 
-## 章配置の仕様（重要）
-- 親行（参考書IDのある行）に「第1章」を記入
-- 第2章以降は下の行へ追記
-- update のプレビューは、子行（第2章以降）の増減を表示
+## 4. ライセンス/免責
+- このリポジトリは学習塾内の運用を前提にしています。固有のデータ構造・命名があります。
+- 個人情報・機微情報の取り扱いに注意し、アクセス権限や公開範囲を十分に管理してください。
 
-## 検索仕様（books.find）
-- exact/phrase/partial に加え、双方向カバレッジ（Q⊆T, T⊆Q）をIDF加重で評価
-- 表記ゆれ（助詞/区切り）に頑健。スコア/confidence を返却
-
-## テスト
-### GAS（GASエディタの実行メニュー）
-- testBooksFind / testBooksGetSingle / testBooksGetMultiple / testBooksFilterMath
-- testBooksCreateUpdateDelete（gTMP 作成→更新→削除）
-
-### MCP（E2E; EXEC_URL を使用）
-```
-export EXEC_URL="https://script.google.com/macros/s/<DEPLOY_ID>/exec"
-uv run python apps/mcp/tests/run_tests.py
-```
-内容: tools_help, books_list, find, get(単/複), filter, create→update(プレビュー→確定)→delete(プレビュー→確定)
-および planner（ids/dates/plan_get(統合) / plan_propose(items) / plan_confirm）の疎通
-
-### まとめ処理の小ベンチ（任意）
-- GAS: `testPlannerBulkSpeedGAS()`（週2の空欄最大10件を write→revert。所要時間をログ）
-- MCP: `BULK_N=12 uv run python apps/mcp/tests/run_tests.py`（targets→itemsで一括 propose→confirm→revert。所要時間を出力）
-
-## 運用トグル（ScriptProperties; GAS）
-- ENABLE_FIND_DEBUG=true|false（既定 false）: find 上位候補をログに出力
-- ENABLE_TABLE_READ=true|false（既定 false）: table.read を開発時のみ有効化
-
-## トラブルシューティング
-- 302/303 リダイレクト: HTTPクライアントは follow_redirects を有効化（curl は -L）
-- Cloud Run の 406: /mcp 直叩き時の想定挙動（Accept: text/event-stream が必要）
-- EXEC_URL is not set: Cloud Run の環境変数を再設定
-- pickCol is not defined: GAS 側のビルド/デプロイを最新に（esbuild→clasp push→deploy）
-
-## 開発メモ
-- 変更→ビルド→push→既存デプロイIDで再デプロイ（GAS）
-- MCP は scripts/deploy_mcp.sh でワンコマンド
