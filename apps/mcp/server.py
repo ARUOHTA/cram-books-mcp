@@ -1,4 +1,4 @@
-import os, sys, httpx
+import os, sys, httpx, json
 from typing import Any, Iterable
 try:
     from .exec_api import scripts_run  # when running as a package
@@ -303,6 +303,107 @@ async def books_filter(where: Any = None, contains: Any = None, limit: int | Non
         return await _post(payload)
     except Exception as e:
         return {"ok": False, "op": "books.filter", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
+
+
+# ===== ChatGPT Connectors compatibility: search/fetch =====
+
+@mcp.tool(name="search")
+async def connectors_search(query: Any) -> dict:
+    """Search across Books by title/subject for ChatGPT Connectors.
+
+    Returns a JSON string in a single text content item with shape:
+    {"results":[{"id":"book:<book_id>","title":"<subject>: <title>","url":"<exec url>"]}
+    """
+    q = _coerce_str(query, ("query","q","text"))
+    results: list[dict[str, str]] = []
+    if q:
+        # Prefer books.filter contains title, fallback to books.find
+        try:
+            data = await _post({"op": "books.filter", "contains": {"参考書名": q}, "limit": 10})
+            items = ((data or {}).get("data") or {}).get("books") or []
+            for b in items[:10]:
+                bid = b.get("id")
+                title = b.get("title")
+                subject = b.get("subject")
+                if not bid or not title:
+                    continue
+                url = f"{_exec_url()}?op=books.get&book_id={bid}"
+                results.append({
+                    "id": f"book:{bid}",
+                    "title": f"{subject or ''}: {title}",
+                    "url": url,
+                    "text": (title or "")[:200]
+                })
+        except Exception:
+            pass
+        # Fallback to books.find if no results
+        if not results:
+            try:
+                data = await _get({"op": "books.find", "query": q})
+                cands = ((data or {}).get("data") or {}).get("candidates") or []
+                for c in cands[:10]:
+                    bid = c.get("book_id")
+                    title = c.get("title")
+                    subject = c.get("subject")
+                    if not bid or not title:
+                        continue
+                    url = f"{_exec_url()}?op=books.get&book_id={bid}"
+                    results.append({
+                        "id": f"book:{bid}",
+                        "title": f"{subject or ''}: {title}",
+                        "url": url,
+                        "text": (title or "")[:200]
+                    })
+            except Exception:
+                pass
+    payload = {"results": results}
+    return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}
+
+@mcp.tool(name="fetch")
+async def connectors_fetch(id: Any) -> dict:
+    """Fetch a single document by id for ChatGPT Connectors.
+
+    Supported ids:
+    - book:<book_id>
+    - monthly:<spreadsheet_id>:<yy>:<m>:<row> (optional; reserved)
+    """
+    sid = _coerce_str(id, ("id",)) or ""
+    if sid.startswith("book:"):
+        bid = sid.split(":", 1)[1]
+        data = await books_get(book_id=bid)
+        if not data.get("ok"):
+            doc = {"id": sid, "title": bid, "text": "Not found", "url": f"{_exec_url()}?op=books.get&book_id={bid}", "metadata": {"source": "books"}}
+            return {"content": [{"type": "text", "text": json.dumps(doc, ensure_ascii=False)}]}
+        book = ((data.get("data") or {}).get("book") or {})
+        title = book.get("title") or bid
+        subject = book.get("subject") or ""
+        monthly_goal = book.get("monthly_goal") or ""
+        unit_load = book.get("unit_load")
+        # chapters text (optional compact)
+        chapters = book.get("structure", {}).get("chapters", []) if isinstance(book.get("structure"), dict) else []
+        chap_lines = []
+        for ch in chapters[:30]:
+            t = ch.get("title")
+            rg = ch.get("range") or {}
+            if t:
+                if rg.get("start") and rg.get("end"):
+                    chap_lines.append(f"- {t}: {rg['start']}~{rg['end']}")
+                else:
+                    chap_lines.append(f"- {t}")
+        text_parts = [
+            f"Title: {title}",
+            f"Subject: {subject}",
+            f"Monthly goal: {monthly_goal}",
+            f"Unit load: {unit_load}",
+        ]
+        if chap_lines:
+            text_parts.append("Chapters:\n" + "\n".join(chap_lines))
+        url = f"{_exec_url()}?op=books.get&book_id={bid}"
+        doc = {"id": sid, "title": f"{subject}: {title}", "text": "\n".join(text_parts), "url": url, "metadata": {"source": "books", "book_id": bid}}
+        return {"content": [{"type": "text", "text": json.dumps(doc, ensure_ascii=False)}]}
+    # Unknown id type
+    doc = {"id": sid, "title": sid, "text": "Unsupported id type", "url": "", "metadata": {"error": "unsupported"}}
+    return {"content": [{"type": "text", "text": json.dumps(doc, ensure_ascii=False)}]}
 
 
 # ===== Students API (MVP: master sheet only) =====
@@ -806,6 +907,27 @@ async def planner_plan_confirm(confirm_token: str) -> dict:
     return await _post(payload)
 
 @mcp.tool()
+async def planner_monthly_filter(year: int | str, month: int | str, student_id: Any = None, spreadsheet_id: Any = None) -> dict:
+    """月間管理シートから指定の年月(B=年下2桁, C=月)の実績行を取得します（読み取りのみ）。
+
+    引数:
+    - year: 25 または 2025（4桁可: 2000を引いて2桁に正規化）
+    - month: 1..12
+    - student_id または spreadsheet_id のいずれか
+
+    返り値:
+    - { year, month, items:[{ row, raw_code, month_code, book_id, subject, title, guideline_note, unit_load, monthly_minutes, guideline_amount, weeks[1..5] }], count }
+    """
+    payload: dict[str, Any] = {"op": "planner.monthly.filter"}
+    sid = _coerce_str(student_id, ("student_id","id"))
+    spid = _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id"))
+    if sid: payload["student_id"] = sid
+    if spid: payload["spreadsheet_id"] = spid
+    payload["year"] = year
+    payload["month"] = month
+    return await _post(payload)
+
+@mcp.tool()
 async def planner_guidance() -> dict:
     """LLM向け：週間管理シートの計画作成ガイドを返します。
 
@@ -853,5 +975,16 @@ async def planner_guidance() -> dict:
 
 if __name__ == "__main__":
     import uvicorn
-    app = mcp.streamable_http_app()
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
+    base_app = mcp.streamable_http_app()  # exposes /mcp (SSE expected)
+
+    async def sse_compat_app(scope, receive, send):
+        """Route /sse and /sse/ to the underlying /mcp SSE endpoint for ChatGPT compatibility."""
+        if scope.get("type") == "http":
+            path = scope.get("path", "")
+            if path == "/sse" or path.startswith("/sse/"):
+                new_scope = dict(scope)
+                new_scope["path"] = "/mcp"
+                return await base_app(new_scope, receive, send)
+        return await base_app(scope, receive, send)
+
+    uvicorn.run(sse_compat_app, host="0.0.0.0", port=int(os.getenv("PORT", "8080")))

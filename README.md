@@ -1,6 +1,6 @@
 # CRAM Books MCP
 
-学習塾で運用している「参考書マスター（Google スプレッドシート）」を、LLM から安全に「提案→承認→実行」で操作するためのモノレポです。GAS（Google Apps Script）で Web API を提供し、MCP（Model Context Protocol）サーバーからHTTPで呼び出します。
+学習塾で運用している Google スプレッドシート群（参考書マスター／生徒マスター／スピードプランナー）を、LLM から安全に「提案→承認→実行」で操作するためのモノレポです。GAS（Google Apps Script）がWeb APIを提供し、MCP（Model Context Protocol）サーバーがHTTP経由で呼び出します。
 
 ```
 [LLM (Claude 等)]
@@ -9,16 +9,14 @@
 [Cloud Run 上の MCP サーバー]  ←(ENV)→  EXEC_URL
       │  (HTTP GET/POST, JSON)
       ▼
-[Apps Script(GAS) WebApp] ──────────→ [Google スプレッドシート(参考書マスター)]
+[Apps Script(GAS) WebApp] ──────────→ [Google スプレッドシート(Books/Students/Planner)]
 ```
 
 ## 主な機能
-- 参考書の検索・取得・絞り込み・新規作成・更新・削除
-- 複数IDの GET（GETクエリの配列対応）
-- 更新/削除はプレビュー→承認（トークン）→確定の二段階
-- 章配置の統一仕様（親行に第1章、続きは下行）
-- 検索は双方向カバレッジ（Q⊆T, T⊆Q + IDF）で表記ゆれに強い
-- MCP 側にツール一覧ヘルプ（tools_help）、軽量一覧（books_list）
+- Books: 検索・取得・絞り込み・新規作成・更新（preview→confirm）・削除（preview→confirm）
+- Students: 在塾既定の list/find を含む CRUD
+- Planner（週間管理）: 読み（ids/dates/metrics/plan）＋ 計画セルの安全な書込（前提条件＋52文字上限、preview→confirm）
+- 複数IDの GET（GETクエリの配列対応）、tools_help、books_list（軽量）
 
 ## ディレクトリ構成
 ```
@@ -92,6 +90,10 @@ scripts/deploy_mcp.sh              # EXEC_URL は apps/gas/.prod_deploy_id を�
 - books_list(limit?) 親行一覧（id/subject/title のみ）
 - tools_help() 公開ツールの簡易ヘルプ
 
+### Planner（週間管理）
+- planner_ids_list / planner_dates_get|propose|confirm / planner_metrics_get / planner_plan_get|propose|confirm / planner_guidance
+- 制約: A非空・週間時間非空・最大52文字、overwrite=falseが既定
+
 注意（create/update; LLM向け）
 - chapters は「最終形」を完全指定（追記ではない）
 - numbering（番号の数え方）は必ず埋める（空欄禁止）
@@ -105,6 +107,7 @@ scripts/deploy_mcp.sh              # EXEC_URL は apps/gas/.prod_deploy_id を�
 - GET: op=books.find|books.get|health ほか
 - GET（配列）: op=books.get&book_ids=ID&book_ids=ID...
 - POST: JSON の op に応じて実行（books.*）
+ - Planner（weekly）: planner.ids_list / planner.dates.get|set / planner.metrics.get / planner.plan.get|set
 
 ## 章配置の仕様（重要）
 - 親行（参考書IDのある行）に「第1章」を記入
@@ -126,6 +129,28 @@ export EXEC_URL="https://script.google.com/macros/s/<DEPLOY_ID>/exec"
 uv run python apps/mcp/tests/run_tests.py
 ```
 内容: tools_help, books_list, find, get(単/複), filter, create→update(プレビュー→確定)→delete(プレビュー→確定)
+（SPREADSHEET_ID指定時は planner の ids/dates/metrics/plan と plan_propose の疎通も実施）
+
+## ChatGPT コネクタ接続（MCP準拠）
+
+ChatGPTのコネクタは search / fetch の2ツールのみをサポートします。本サーバーは以下仕様で対応しています。
+
+- エンドポイント: Cloud Run サービスURL + `/sse/`
+  - 例: `https://<SERVICE>.a.run.app/sse/`
+- ツール: `search`（引数: クエリ文字列）/ `fetch`（引数: id 文字列）
+- レスポンス: content 配列に単一の `{type:"text", text:"JSON文字列"}` を返却
+  - search 返却: `{ "results": [{"id","title","url","text"}] }`
+  - fetch 返却: `{ "id","title","text","url","metadata" }`
+- 現状検索対象: Books（参考書）。idは `book:<book_id>` 形式
+
+接続手順（例）
+1. ChatGPT 設定 → Connectors → Add server
+2. Server URL: `https://<SERVICE>.a.run.app/sse/`
+3. Allowed tools: `search`, `fetch`（require_approval: never 推奨）
+4. テスト: 「青チャート」で search → 返却 `id` を fetch
+
+備考
+- Claudeのように任意ツールを使わないため、横断利用は search をメタサーチに、fetch を id種別で分岐する設計（将来: `student:`/`weekly:`/`monthly:`）で拡張します。
 
 ## 運用トグル（ScriptProperties; GAS）
 - ENABLE_FIND_DEBUG=true|false（既定 false）: find 上位候補をログに出力
@@ -136,6 +161,7 @@ uv run python apps/mcp/tests/run_tests.py
 - Cloud Run の 406: /mcp 直叩き時の想定挙動（Accept: text/event-stream が必要）
 - EXEC_URL is not set: Cloud Run の環境変数を再設定
 - pickCol is not defined: GAS 側のビルド/デプロイを最新に（esbuild→clasp push→deploy）
+ - 週間管理のシート名違い: 正式は「週間管理」。互換で「週間計画」等にも自動対応
 
 ## 開発メモ
 - 変更→ビルド→push→既存デプロイIDで再デプロイ（GAS）
