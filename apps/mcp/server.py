@@ -774,8 +774,8 @@ async def planner_plan_get(student_id: Any = None, spreadsheet_id: Any = None) -
     return {"ok": True, "op": "planner.plan.get", "data": {"weeks": weeks}}
 
 @mcp.tool()
-async def planner_plan_propose(week_index: int, plan_text: str, overwrite: bool | None = None, *, book_id: str | None = None, row: int | None = None, student_id: Any = None, spreadsheet_id: Any = None) -> dict:
-    """計画セル（週×行 or 週×book_id）を書き込むプレビューを作成します。
+async def planner_plan_propose(week_index: int | None = None, plan_text: str | None = None, overwrite: bool | None = None, *, book_id: str | None = None, row: int | None = None, student_id: Any = None, spreadsheet_id: Any = None, items: Any = None) -> dict:
+    """計画セルのプレビューを作成（単体/複数どちらも）。
 
     ルール（重要）:
     - 既定: overwrite=false（空欄のみ埋める）。明示時のみ上書き。
@@ -785,58 +785,114 @@ async def planner_plan_propose(week_index: int, plan_text: str, overwrite: bool 
     - 記述は簡潔に。波線「~」で範囲、カンマで複数範囲、必要なら改行を使用。
     - 非gID行ではC列のタイトル・D列の進め方メモを参考に、無理に正規化しない。
 
-    提案のみを作成し、最終反映は planner_plan_confirm で行います。
+    提案のみを作成し、最終反映は planner_plan_confirm で行います（単体/一括いずれも）。
     """
-    if not (book_id or row):
-        return {"ok": False, "op": "planner.plan.propose", "error": {"code": "BAD_INPUT", "message": "book_id or row is required"}}
-    # 現在値を取得して diff を作成
-    current = await planner_plan_get(student_id=student_id, spreadsheet_id=spreadsheet_id)
-    if not isinstance(current, dict) or not current.get("ok"):
-        return {"ok": False, "op": "planner.plan.propose", "error": {"code": "UPSTREAM", "message": str(current)}}
-    weeks = (current.get("data") or {}).get("weeks") or []
-    before_text: str | None = None
-    cell = None
-    try:
-        # book_id 指定時は ids_list で行を解決
-        target_row = row
-        if book_id and not target_row:
-            ids = await planner_ids_list(student_id=student_id, spreadsheet_id=spreadsheet_id)
-            if ids.get("ok"):
-                for it in (ids["data"]["items"] or []):  # type: ignore
-                    if it.get("book_id") == book_id:
-                        target_row = it.get("row")
+
+    async def _propose_single(wi: int, txt: str, target_row: int | None, target_book_id: str | None) -> dict:
+        if not (target_book_id or target_row):
+            return {"ok": False, "error": {"code": "MISSING_TARGET", "message": "row or book_id required"}}
+        # 現在値を取得して diff を作成
+        current = await planner_plan_get(student_id=student_id, spreadsheet_id=spreadsheet_id)
+        if not isinstance(current, dict) or not current.get("ok"):
+            return {"ok": False, "error": {"code": "UPSTREAM", "message": str(current)}}
+        weeks = (current.get("data") or {}).get("weeks") or []
+        before_text: str | None = None
+        cell = None
+        try:
+            # book_id 指定時は ids_list で行を解決
+            tgt_row = target_row
+            if target_book_id and not tgt_row:
+                ids = await planner_ids_list(student_id=student_id, spreadsheet_id=spreadsheet_id)
+                if ids.get("ok"):
+                    for it in (ids["data"]["items"] or []):  # type: ignore
+                        if it.get("book_id") == target_book_id:
+                            tgt_row = it.get("row")
+                            break
+            wk = next(w for w in weeks if int(w.get("index", w.get("week_index"))) == int(wi))
+            col = wk.get("column")
+            if tgt_row:
+                for item in wk.get("items", []):
+                    if int(item.get("row")) == int(tgt_row):
+                        before_text = item.get("plan_text")
                         break
-        # 週から列を拾い、rows配列から before を取り出す
-        wk = next(w for w in weeks if int(w.get("index", w.get("week_index"))) == int(week_index))
-        col = wk.get("column")
-        if target_row:
-            for item in wk.get("items", []):
-                if int(item.get("row")) == int(target_row):
-                    before_text = item.get("plan_text")
-                    break
-            cell = f"{col}{target_row}"
-    except Exception:
-        pass
-    payload = {
-        "op": "planner.plan.set",
-        "student_id": _coerce_str(student_id, ("student_id","id")),
-        "spreadsheet_id": _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id")),
-        "week_index": week_index,
-        "plan_text": plan_text,
-        "overwrite": bool(overwrite) if overwrite is not None else False,
-    }
-    if book_id: payload["book_id"] = book_id
-    if row: payload["row"] = row
-    token = _preview_put(payload)
-    return {"ok": True, "op": "planner.plan.propose", "data": {"confirm_token": token, "effects": [{"cell": cell, "before": {"plan_text": before_text}, "after": {"plan_text": plan_text}}]}}
+                cell = f"{col}{tgt_row}"
+        except Exception:
+            pass
+        payload = {
+            "op": "planner.plan.set",
+            "student_id": _coerce_str(student_id, ("student_id","id")),
+            "spreadsheet_id": _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id")),
+            "week_index": wi,
+            "plan_text": txt,
+            "overwrite": bool(overwrite) if overwrite is not None else False,
+        }
+        if target_book_id: payload["book_id"] = target_book_id
+        if target_row: payload["row"] = target_row
+        token = _preview_put(payload)
+        return {"ok": True, "data": {"confirm_token": token, "effects": [{"cell": cell, "before": {"plan_text": before_text}, "after": {"plan_text": txt}}]}}
+
+    # 複数（items）の場合
+    if isinstance(items, list) and items:
+        child_tokens: list[str] = []
+        effects_all: list[dict] = []
+        warnings: list[str] = []
+        for it in items:
+            try:
+                wi = int(it.get("week_index"))
+                txt = str(it.get("plan_text") or "")
+            except Exception:
+                warnings.append(f"bad item: {it}")
+                continue
+            ow_local = it.get("overwrite")
+            if ow_local is not None:
+                # 一時的にoverwriteをローカル上書き
+                old_overwrite = overwrite
+                overwrite = bool(ow_local)
+            res = await _propose_single(wi, txt, it.get("row"), it.get("book_id"))
+            if ow_local is not None:
+                overwrite = old_overwrite
+            if not res.get("ok"):
+                warnings.append(str(res))
+                continue
+            child_tokens.append(res["data"]["confirm_token"])
+            eff = (res["data"] or {}).get("effects") or []
+            if isinstance(eff, list): effects_all.extend(eff)
+        if not child_tokens:
+            return {"ok": False, "op": "planner.plan.propose", "error": {"code": "NO_EFFECTS", "message": "no valid items"}, "data": {"effects": [], "warnings": warnings}}
+        bulk_token = _preview_put({"bulk_children": child_tokens})
+        return {"ok": True, "op": "planner.plan.propose", "data": {"confirm_token": bulk_token, "effects": effects_all, "warnings": warnings}}
+
+    # 単体（従来互換）
+    if week_index is None or plan_text is None:
+        return {"ok": False, "op": "planner.plan.propose", "error": {"code": "BAD_INPUT", "message": "week_index and plan_text are required for single propose"}}
+    res = await _propose_single(int(week_index), str(plan_text), row, book_id)
+    if not res.get("ok"):
+        return {"ok": False, "op": "planner.plan.propose", "error": res.get("error")}
+    return {"ok": True, "op": "planner.plan.propose", "data": res["data"]}
 
 @mcp.tool()
 async def planner_plan_confirm(confirm_token: str) -> dict:
-    payload = _preview_pop(confirm_token)
-    if not payload:
+    saved = _preview_pop(confirm_token)
+    if not saved:
         return {"ok": False, "op": "planner.plan.confirm", "error": {"code": "CONFIRM_EXPIRED", "message": "invalid token"}}
-    payload["op"] = "planner.plan.set"
-    return await _post(payload)
+    # 一括トークン
+    if isinstance(saved, dict) and saved.get("bulk_children"):
+        children = saved.get("bulk_children") or []
+        results: list[dict] = []
+        for tok in children:
+            pay = _preview_pop(tok)
+            if not pay:
+                results.append({"ok": False, "error": {"code": "CHILD_EXPIRED"}})
+                continue
+            pay["op"] = "planner.plan.set"
+            res = await _post(pay)
+            results.append({"ok": bool(res.get("ok")), "data": res.get("data"), "error": res.get("error")})
+        ok_count = sum(1 for r in results if r.get("ok"))
+        return {"ok": True, "op": "planner.plan.confirm", "data": {"confirmed": ok_count, "results": results}}
+    # 単体
+    saved["op"] = "planner.plan.set"
+    res = await _post(saved)
+    return res
 
 @mcp.tool()
 async def planner_monthly_filter(year: int | str, month: int | str, student_id: Any = None, spreadsheet_id: Any = None) -> dict:
