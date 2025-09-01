@@ -31,3 +31,15 @@
 次の候補タスク:
 - ローカル実行で `apps/gas/deploy_and_test.sh -d '{"op":"books.find","query":"青チャート"}'` を用い、`doPost` 到達と JSON 応答を確認。
 - 確認後、`books.create/update/filter` の POST 実装とテストケースを追加。
+
+## 2025-09-01
+
+- feat(mcp): planner_plan_propose に早期警告を追加（`data.warnings`）。`week_index` 範囲外と `plan_text` 52文字超を検知。
+- feat(mcp): planner_plan_targets を強化。Books TOCから `numbering_symbol`/`max_end` を把握し、`suggested_plan_text` を付与（prev_range_hint と guideline_amount から推定）。`end_of_book` を同梱。
+- docs: tools_help/README/AGENTS を更新（targetsのサジェスト/ proposeのwarnings を明記）。
+- chore: 作業ブランチ `feat/llm-ux-improvements` を作成。
+- feat(gas): planner.plan.set に `items[]` を追加し、週列ごとに連続ブロックへバッチ書込み（単体互換維持）。
+- feat(mcp): planner_plan_confirm が一括トークンを単一GASリクエスト（items[]）へ集約し、GAS側のバッチ書込みを活用。
+- feat(mcp): 新ツール `planner_plan_create` を追加（提案/確定を統合）。週混在の一括作成を1コールで反映。応答に `guidance_digest` と `warnings` を同梱。
+- docs: README/AGENTS/tools_help を `planner_plan_create` 中心に更新。旧 propose/confirm は deprecated と明記。
+ - breaking(mcp docs): propose/confirm の実装は互換向けstubのみにし、ドキュメント上は完全廃止。今後は create に一本化。

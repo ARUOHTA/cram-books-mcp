@@ -24,8 +24,10 @@ LLM と Google スプレッドシート（参考書マスター／生徒マス�
   - 在塾が既定の list/find/get/filter と、create/update/delete
 - スピードプランナー（週間管理）
   - 計画の読取（plan_get）と目安（週時間・単位処理量・目安処理量）を“統合で”取得
-  - 今月の“埋めるべきセル”の自動抽出（plan_targets）
-  - 計画の一括プレビュー→一括確定（plan_propose(items[])→plan_confirm）
+  - 今月の“埋めるべきセル”の自動抽出（plan_targets）＋ TOCに基づく簡易サジェスト（suggested_plan_text/numbering_symbol）
+  - 計画の一括作成（planner_plan_create）。週混在OKで1コール反映。MUST: 実行前に planner_guidance を参照（create 応答にも guidance_digest を同梱）
+  - propose/confirm は廃止。既存クライアント互換は維持するが、新規は create を使用
+  - 確定はGAS側でバッチ書込み（`planner.plan.set` の `items[]` 最適化）
 - スピードプランナー（月間管理）
   - 指定年月（B=年、C=月）の実績行を構造化して取得（planner_monthly_filter）
 
@@ -33,9 +35,10 @@ LLM と Google スプレッドシート（参考書マスター／生徒マス�
 1) 現状把握: `planner_plan_get(student_id=… or spreadsheet_id=…)`
    - weeks[].items[] に `plan_text` と `weekly_minutes / unit_load / guideline_amount` が入っています
 2) 書込み候補の自動抽出: `planner_plan_targets(…)`
-   - A非空・週間時間非空・未入力のみが targets[] に出ます
+   - A非空・週間時間非空・未入力のみが targets[] に出ます。各候補に `prev_range_hint` と `suggested_plan_text`（目次/目安量に基づく推定）を付加
 3) 一括プレビュー→承認: `planner_plan_propose(items=[…])` → `planner_plan_confirm(confirm_token)`
    - items は `{week_index, row|book_id, plan_text, overwrite?}` の配列
+   - 週数外や52文字超の場合、`planner_plan_propose` の `data.warnings` に警告（確定時は失敗）
 
 > 例）「二週目から五週目までまとめて作って」
 > 1) targets で週2–5の候補だけ拾う → 2) items を組み立て `plan_propose(items)` → 3) effects（差分）を確認 → 4) `plan_confirm(token)`
@@ -151,4 +154,3 @@ scripts/deploy_mcp.sh
 ## 4. ライセンス/免責
 - このリポジトリは学習塾内の運用を前提にしています。固有のデータ構造・命名があります。
 - 個人情報・機微情報の取り扱いに注意し、アクセス権限や公開範囲を十分に管理してください。
-

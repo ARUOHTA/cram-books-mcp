@@ -208,42 +208,135 @@ const PLAN_TEXT_MAX = 52;
 
 // === plan_set: 計画セルへの書込み（前提: A非空 かつ 対象週のE/M/U/AC/AKが非空） ===
 export function plannerPlanSet(req: RowMap): ApiResponse {
-  const { week_index, plan_text, overwrite } = req;
-  if (!week_index || week_index < 1 || week_index > 5) return ng("planner.plan.set", "BAD_REQUEST", "week_index must be 1..5");
-  const text = String(plan_text ?? "");
-  if (text.length > PLAN_TEXT_MAX) return ng("planner.plan.set", "TOO_LONG", `plan_text must be <= ${PLAN_TEXT_MAX} chars`);
-
   const sh = openPlannerSheet(req);
   if (!sh) return ng("planner.plan.set", "NOT_FOUND", "planner sheet not found");
 
-  // 行の特定: book_id（A列由来）または row 指定
-  let targetRow = Number(req.row || 0) || null;
-  const week = WEEK_COLS[week_index - 1];
+  // 単体モードか一括(items)かを判定
+  const items: any[] | null = Array.isArray(req.items) ? req.items : null;
+  if (!items) {
+    const { week_index, plan_text, overwrite } = req;
+    if (!week_index || week_index < 1 || week_index > 5) return ng("planner.plan.set", "BAD_REQUEST", "week_index must be 1..5");
+    const text = String(plan_text ?? "");
+    if (text.length > PLAN_TEXT_MAX) return ng("planner.plan.set", "TOO_LONG", `plan_text must be <= ${PLAN_TEXT_MAX} chars`);
 
-  if (!targetRow && req.book_id) {
-    const abcd = readABCD(sh); // A4:D30
-    for (let i = 0; i < abcd.length; i++) {
-      const a = String(abcd[i][0] || "");
-      if (!a.trim()) break;
-      const parsed = parseBookCode(a);
-      if (String(parsed.book_id) === String(req.book_id)) { targetRow = 4 + i; break; }
+    // 行の特定: book_id（A列由来）または row 指定
+    let targetRow = Number(req.row || 0) || null;
+    const week = WEEK_COLS[week_index - 1];
+    if (!targetRow && req.book_id) {
+      const abcd = readABCD(sh); // A4:D30
+      for (let i = 0; i < abcd.length; i++) {
+        const a = String(abcd[i][0] || "");
+        if (!a.trim()) break;
+        const parsed = parseBookCode(a);
+        if (String(parsed.book_id) === String(req.book_id)) { targetRow = 4 + i; break; }
+      }
     }
+    if (!targetRow) return ng("planner.plan.set", "ROW_NOT_FOUND", "row or book_id did not match any row");
+
+    // 前提条件: A列非空、週間時間セル非空
+    const aVal = sh.getRange(targetRow, 1).getDisplayValue();
+    if (!String(aVal).trim()) return ng("planner.plan.set", "PRECONDITION_A_EMPTY", "A[row] must not be empty");
+    const timeVal = sh.getRange(`${week.time}${targetRow}`).getDisplayValue();
+    if (!String(timeVal).trim()) return ng("planner.plan.set", "PRECONDITION_TIME_EMPTY", `weekly_minutes cell (${week.time}${targetRow}) must not be empty`);
+
+    // 既定: 空欄のみ書き込み（overwrite=false）
+    const planCell = sh.getRange(`${week.plan}${targetRow}`);
+    const cur = String(planCell.getDisplayValue() || "");
+    if (!req.overwrite && cur.trim() !== "") {
+      return ng("planner.plan.set", "ALREADY_EXISTS", `cell already has text; set overwrite=true to replace`);
+    }
+    planCell.setValue(text);
+    return ok("planner.plan.set", { updated: true, cell: `${week.plan}${targetRow}` });
   }
-  if (!targetRow) return ng("planner.plan.set", "ROW_NOT_FOUND", "row or book_id did not match any row");
 
-  // 前提条件: A列非空、週間時間セル非空
-  const aVal = sh.getRange(targetRow, 1).getDisplayValue();
-  if (!String(aVal).trim()) return ng("planner.plan.set", "PRECONDITION_A_EMPTY", "A[row] must not be empty");
-  const timeVal = sh.getRange(`${week.time}${targetRow}`).getDisplayValue();
-  if (!String(timeVal).trim()) return ng("planner.plan.set", "PRECONDITION_TIME_EMPTY", `weekly_minutes cell (${week.time}${targetRow}) must not be empty`);
+  // 一括(items)モード
+  type Prepared = { week_index: number; row: number; text: string; cellA1: string };
+  const prepared: Prepared[] = [];
+  const results: any[] = [];
 
-  // 既定: 空欄のみ書き込み（overwrite=false）
-  const planCell = sh.getRange(`${week.plan}${targetRow}`);
-  const cur = String(planCell.getDisplayValue() || "");
-  if (!overwrite && cur.trim() !== "") {
-    return ng("planner.plan.set", "ALREADY_EXISTS", `cell already has text; set overwrite=true to replace`);
+  // A/B/C/D と時間列を一度だけ読む
+  const abcd = readABCD(sh); // A4:D30
+
+  // book_id→row のマップを作成
+  const bookRowMap: Record<string, number> = {};
+  for (let i = 0; i < abcd.length; i++) {
+    const a = String(abcd[i][0] || "").trim();
+    if (!a) break; // 最初の空行で停止
+    const parsed = parseBookCode(a);
+    if (parsed.book_id) bookRowMap[String(parsed.book_id)] = 4 + i;
   }
 
-  planCell.setValue(text);
-  return ok("planner.plan.set", { updated: true, cell: `${week.plan}${targetRow}` });
+  // 先に現在の計画セルを必要分だけ読む（overwrite判定に使う）
+  const currentPlanCache: Record<string, string> = {};
+  const getCurrentPlan = (col: string, row: number): string => {
+    const k = `${col}${row}`;
+    if (currentPlanCache[k] !== undefined) return currentPlanCache[k];
+    currentPlanCache[k] = String(sh.getRange(k).getDisplayValue() || "");
+    return currentPlanCache[k];
+  };
+
+  // 週×連続行にまとめるためのバケット
+  const buckets: Record<string, { col: string; rows: number[]; values: string[] }> = {};
+
+  for (const it of items) {
+    const wk = Number(it?.week_index || 0);
+    const txt = String(it?.plan_text ?? "");
+    const ow = Boolean(it?.overwrite ?? req.overwrite ?? false);
+    if (!wk || wk < 1 || wk > 5) { results.push({ ok: false, error: { code: "BAD_WEEK", message: `week_index must be 1..5` } }); continue; }
+    if (txt.length > PLAN_TEXT_MAX) { results.push({ ok: false, error: { code: "TOO_LONG", message: `plan_text must be <= ${PLAN_TEXT_MAX} chars` } }); continue; }
+
+    // 行解決
+    let row = Number(it?.row || 0) || 0;
+    if (!row && it?.book_id) row = Number(bookRowMap[String(it.book_id)]) || 0;
+    if (!row) { results.push({ ok: false, error: { code: "ROW_NOT_FOUND", message: "row or book_id did not match any row" } }); continue; }
+
+    const week = WEEK_COLS[wk - 1];
+    // 前提: A[row] 非空
+    const aVal = String(sh.getRange(row, 1).getDisplayValue() || "").trim();
+    if (!aVal) { results.push({ ok: false, error: { code: "PRECONDITION_A_EMPTY", message: "A[row] must not be empty" } }); continue; }
+    // 前提: 週間時間セル非空
+    const timeVal = String(sh.getRange(`${week.time}${row}`).getDisplayValue() || "").trim();
+    if (!timeVal) { results.push({ ok: false, error: { code: "PRECONDITION_TIME_EMPTY", message: `weekly_minutes cell (${week.time}${row}) must not be empty` } }); continue; }
+
+    // 既定: 空欄のみ（ow=false）
+    const cellA1 = `${week.plan}${row}`;
+    const cur = getCurrentPlan(week.plan, row);
+    if (!ow && cur.trim() !== "") {
+      results.push({ ok: false, cell: cellA1, error: { code: "ALREADY_EXISTS", message: "cell already has text; set overwrite=true to replace" } });
+      continue;
+    }
+
+    // バケットへ
+    const key = `${week.plan}`;
+    if (!buckets[key]) buckets[key] = { col: week.plan, rows: [], values: [] };
+    buckets[key].rows.push(row);
+    buckets[key].values.push(txt);
+    prepared.push({ week_index: wk, row, text: txt, cellA1 });
+    results.push({ ok: true, cell: cellA1 });
+  }
+
+  // 書き込み: 列ごとに行を昇順ソートし、連続ブロック単位で setValues
+  const writeBlock = (col: string, rows: number[], vals: string[]) => {
+    // rows と vals は同長
+    const paired = rows.map((r, i) => ({ r, v: vals[i] }));
+    paired.sort((a, b) => a.r - b.r);
+    // 連続ブロックに分割
+    let start = 0;
+    while (start < paired.length) {
+      let end = start;
+      while (end + 1 < paired.length && paired[end + 1].r === paired[end].r + 1) end++;
+      const block = paired.slice(start, end + 1);
+      const firstRow = block[0].r;
+      const height = block.length;
+      const range = sh.getRange(`${col}${firstRow}:${col}${firstRow + height - 1}`);
+      range.setValues(block.map(p => [p.v]));
+      start = end + 1;
+    }
+  };
+
+  Object.values(buckets).forEach(b => {
+    if (b.rows.length > 0) writeBlock(b.col, b.rows, b.values);
+  });
+
+  return ok("planner.plan.set", { updated: true, results });
 }

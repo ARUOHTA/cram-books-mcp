@@ -655,19 +655,30 @@ async def tools_help() -> dict:
             "args": {"student_id": "string?", "spreadsheet_id": "string?"},
         },
         {
-            "name": "planner_plan_propose",
-            "desc": "計画セルのプレビュー（overwrite規則と52文字上限を前提）",
-            "args": {"week_index": "1..5", "plan_text": "string", "overwrite": "bool?", "book_id": "string?", "row": "number?", "student_id": "string?", "spreadsheet_id": "string?"},
+            "name": "planner_plan_create",
+            "desc": "計画セルの一括作成（高速・単発）。MUST: 実行前に planner_guidance を読むこと。",
+            "args": {"items": "{week_index,row|book_id,plan_text,overwrite?}[]", "student_id": "string?", "spreadsheet_id": "string?", "overwrite": "bool?"},
+            "returns": "{ updated, results[], warnings[], guidance_digest }",
+            "notes": "週混在OK。GAS側で列ごとに連続ブロックへバッチ書込み。前提/上限/overwrite規則は従来通り。"
         },
         {
-            "name": "planner_plan_confirm",
-            "desc": "計画セルの確定（proposeトークン必須）",
-            "args": {"confirm_token": "string"},
+            "name": "planner_plan_create",
+            "desc": "計画セルの一括作成（高速・単発）。MUST: 実行前に planner_guidance を読むこと。",
+            "args": {"items": "{week_index,row|book_id,plan_text,overwrite?}[]", "student_id": "string?", "spreadsheet_id": "string?", "overwrite": "bool?"},
+            "returns": "{ updated, results[], warnings[], guidance_digest }",
+            "notes": "週混在OK。GAS側で列ごとに連続ブロックへバッチ書込み。前提/上限/overwrite規則は従来通り。"
         },
         {
             "name": "planner_guidance",
             "desc": "LLM向け：週間管理の計画作成ガイド（書式/上限/前提/手順）",
             "args": {},
+        },
+        {
+            "name": "planner_plan_targets",
+            "desc": "書込み候補の自動抽出（A非空・週間時間非空・計画未入力）。TOCに基づく簡易サジェスト付き。",
+            "args": {"student_id": "string?", "spreadsheet_id": "string?"},
+            "returns": "{ week_count, targets:[{week_index,row,book_id,weekly_minutes,guideline_amount,prev_range_hint,numbering_symbol,suggested_plan_text,suggestion_confidence,end_of_book}] }",
+            "notes": "suggested_plan_text は prev_range_hint と guideline_amount/TOC をもとに推定。境界不確実な場合は confidence=low とする。"
         },
     ]
     return {"ok": True, "op": "tools.help", "data": {"tools": tools}}
@@ -788,54 +799,23 @@ async def planner_plan_propose(week_index: int | None = None, plan_text: str | N
     提案のみを作成し、最終反映は planner_plan_confirm で行います（単体/一括いずれも）。
     """
 
-    async def _propose_single(wi: int, txt: str, target_row: int | None, target_book_id: str | None) -> dict:
-        if not (target_book_id or target_row):
-            return {"ok": False, "error": {"code": "MISSING_TARGET", "message": "row or book_id required"}}
-        # 現在値を取得して diff を作成
-        current = await planner_plan_get(student_id=student_id, spreadsheet_id=spreadsheet_id)
-        if not isinstance(current, dict) or not current.get("ok"):
-            return {"ok": False, "error": {"code": "UPSTREAM", "message": str(current)}}
-        weeks = (current.get("data") or {}).get("weeks") or []
-        before_text: str | None = None
-        cell = None
-        try:
-            # book_id 指定時は ids_list で行を解決
-            tgt_row = target_row
-            if target_book_id and not tgt_row:
-                ids = await planner_ids_list(student_id=student_id, spreadsheet_id=spreadsheet_id)
-                if ids.get("ok"):
-                    for it in (ids["data"]["items"] or []):  # type: ignore
-                        if it.get("book_id") == target_book_id:
-                            tgt_row = it.get("row")
-                            break
-            wk = next(w for w in weeks if int(w.get("index", w.get("week_index"))) == int(wi))
-            col = wk.get("column")
-            if tgt_row:
-                for item in wk.get("items", []):
-                    if int(item.get("row")) == int(tgt_row):
-                        before_text = item.get("plan_text")
-                        break
-                cell = f"{col}{tgt_row}"
-        except Exception:
-            pass
-        payload = {
-            "op": "planner.plan.set",
-            "student_id": _coerce_str(student_id, ("student_id","id")),
-            "spreadsheet_id": _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id")),
-            "week_index": wi,
-            "plan_text": txt,
-            "overwrite": bool(overwrite) if overwrite is not None else False,
-        }
-        if target_book_id: payload["book_id"] = target_book_id
-        if target_row: payload["row"] = target_row
-        token = _preview_put(payload)
-        return {"ok": True, "data": {"confirm_token": token, "effects": [{"cell": cell, "before": {"plan_text": before_text}, "after": {"plan_text": txt}}]}}
+    # Deprecated: kept for backward compatibility only. Direct users to planner_plan_create.
+    gd = await planner_guidance()
+    return {"ok": False, "op": "planner.plan.propose", "error": {"code": "DEPRECATED", "message": "Use planner_plan_create instead."}, "data": {"guidance_digest": (gd.get("data") or {})}}
 
     # 複数（items）の場合
     if isinstance(items, list) and items:
         child_tokens: list[str] = []
         effects_all: list[dict] = []
         warnings: list[str] = []
+        # week_count を事前取得（範囲外は警告）
+        week_count = 5
+        try:
+            d = await planner_dates_get(student_id=student_id, spreadsheet_id=spreadsheet_id)
+            if isinstance(d, dict) and d.get("ok"):
+                week_count = _week_count_from_dates(d)
+        except Exception:
+            pass
         for it in items:
             try:
                 wi = int(it.get("week_index"))
@@ -843,6 +823,12 @@ async def planner_plan_propose(week_index: int | None = None, plan_text: str | N
             except Exception:
                 warnings.append(f"bad item: {it}")
                 continue
+            # 早期警告: 週数と文字数
+            if wi < 1 or wi > week_count:
+                warnings.append(f"week_index out of range: {wi} (1..{week_count})")
+                continue
+            if len(txt) > 52:
+                warnings.append(f"plan_text too long ({len(txt)} > 52). It will fail on confirm.")
             ow_local = it.get("overwrite")
             if ow_local is not None:
                 # 一時的にoverwriteをローカル上書き
@@ -858,41 +844,116 @@ async def planner_plan_propose(week_index: int | None = None, plan_text: str | N
             eff = (res["data"] or {}).get("effects") or []
             if isinstance(eff, list): effects_all.extend(eff)
         if not child_tokens:
-            return {"ok": False, "op": "planner.plan.propose", "error": {"code": "NO_EFFECTS", "message": "no valid items"}, "data": {"effects": [], "warnings": warnings}}
+            # 併せてガイダンスを提示
+            gd = await planner_guidance()
+            return {"ok": False, "op": "planner.plan.propose", "error": {"code": "NO_EFFECTS", "message": "no valid items"}, "data": {"effects": [], "warnings": warnings, "guidance_digest": (gd.get("data") or {})}}
         bulk_token = _preview_put({"bulk_children": child_tokens})
-        return {"ok": True, "op": "planner.plan.propose", "data": {"confirm_token": bulk_token, "effects": effects_all, "warnings": warnings}}
+        gd = await planner_guidance()
+        return {"ok": True, "op": "planner.plan.propose", "data": {"confirm_token": bulk_token, "effects": effects_all, "warnings": warnings, "guidance_digest": (gd.get("data") or {})}}
 
     # 単体（従来互換）
     if week_index is None or plan_text is None:
         return {"ok": False, "op": "planner.plan.propose", "error": {"code": "BAD_INPUT", "message": "week_index and plan_text are required for single propose"}}
+    # 単体: 早期警告（週数/文字数）
+    single_warnings: list[str] = []
+    try:
+        d = await planner_dates_get(student_id=student_id, spreadsheet_id=spreadsheet_id)
+        if isinstance(d, dict) and d.get("ok"):
+            wc = _week_count_from_dates(d)
+            if int(week_index) < 1 or int(week_index) > wc:
+                single_warnings.append(f"week_index out of range: {week_index} (1..{wc})")
+    except Exception:
+        pass
+    if len(str(plan_text)) > 52:
+        single_warnings.append(f"plan_text too long ({len(str(plan_text))} > 52). It will fail on confirm.")
+
     res = await _propose_single(int(week_index), str(plan_text), row, book_id)
     if not res.get("ok"):
         return {"ok": False, "op": "planner.plan.propose", "error": res.get("error")}
-    return {"ok": True, "op": "planner.plan.propose", "data": res["data"]}
+    data = res.get("data") or {}
+    if single_warnings:
+        data["warnings"] = single_warnings
+    gd = await planner_guidance()
+    data["guidance_digest"] = (gd.get("data") or {})
+    return {"ok": True, "op": "planner.plan.propose", "data": data}
 
 @mcp.tool()
 async def planner_plan_confirm(confirm_token: str) -> dict:
-    saved = _preview_pop(confirm_token)
-    if not saved:
-        return {"ok": False, "op": "planner.plan.confirm", "error": {"code": "CONFIRM_EXPIRED", "message": "invalid token"}}
-    # 一括トークン
-    if isinstance(saved, dict) and saved.get("bulk_children"):
-        children = saved.get("bulk_children") or []
-        results: list[dict] = []
-        for tok in children:
-            pay = _preview_pop(tok)
-            if not pay:
-                results.append({"ok": False, "error": {"code": "CHILD_EXPIRED"}})
-                continue
-            pay["op"] = "planner.plan.set"
-            res = await _post(pay)
-            results.append({"ok": bool(res.get("ok")), "data": res.get("data"), "error": res.get("error")})
-        ok_count = sum(1 for r in results if r.get("ok"))
-        return {"ok": True, "op": "planner.plan.confirm", "data": {"confirmed": ok_count, "results": results}}
-    # 単体
-    saved["op"] = "planner.plan.set"
-    res = await _post(saved)
-    return res
+    gd = await planner_guidance()
+    return {"ok": False, "op": "planner.plan.confirm", "error": {"code": "DEPRECATED", "message": "Use planner_plan_create instead."}, "data": {"guidance_digest": (gd.get("data") or {})}}
+
+
+@mcp.tool()
+async def planner_plan_create(items: Any, student_id: Any = None, spreadsheet_id: Any = None, overwrite: bool | None = None) -> dict:
+    """計画セルを一括作成（高速・単発）。
+
+    MUST: 実行前に planner_guidance を読むこと。応答にも guidance_digest を同梱します。
+
+    引数:
+    - items: [{week_index, row|book_id, plan_text, overwrite?}, …]
+    - student_id | spreadsheet_id: いずれか（シート解決）
+    - overwrite: 省略時は false（空欄のみ）。items側で個別上書き可。
+
+    動作:
+    - 週混在OK。GAS側で列ごとに連続ブロックへまとめて setValues（高速）。
+    - バリデーション: 週数(week_count)・52文字超は warnings として返却（GAS側でも最終検証）。
+    - 返却: { updated, results[], warnings[], guidance_digest }
+    """
+    if not isinstance(items, list) or not items:
+        return {"ok": False, "op": "planner.plan.create", "error": {"code": "BAD_INPUT", "message": "items[] is required"}}
+    sid = _coerce_str(student_id, ("student_id","id"))
+    spid = _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id"))
+    payload: dict[str, Any] = {"op": "planner.plan.set", "items": []}
+    if sid: payload["student_id"] = sid
+    if spid: payload["spreadsheet_id"] = spid
+
+    # 週数（4/5）を取得して早期警告
+    week_count = 5
+    try:
+        d = await planner_dates_get(student_id=sid, spreadsheet_id=spid)
+        if isinstance(d, dict) and d.get("ok"):
+            week_count = _week_count_from_dates(d)
+    except Exception:
+        pass
+
+    warnings: list[str] = []
+    for it in items:
+        try:
+            wi = int(it.get("week_index"))
+            txt = str(it.get("plan_text") or "")
+        except Exception:
+            warnings.append(f"bad item: {it}")
+            continue
+        if wi < 1 or wi > week_count:
+            warnings.append(f"week_index out of range: {wi} (1..{week_count})")
+        if len(txt) > 52:
+            warnings.append(f"plan_text too long ({len(txt)} > 52). It will fail on write.")
+        out_it: dict[str, Any] = {
+            "week_index": wi,
+            "plan_text": txt,
+        }
+        if overwrite is not None and it.get("overwrite") is None:
+            out_it["overwrite"] = bool(overwrite)
+        if it.get("overwrite") is not None:
+            out_it["overwrite"] = bool(it.get("overwrite"))
+        if it.get("row") is not None:
+            out_it["row"] = it.get("row")
+        if it.get("book_id") is not None:
+            out_it["book_id"] = it.get("book_id")
+        payload["items"].append(out_it)
+
+    try:
+        res = await _post(payload)
+    except Exception as e:
+        return {"ok": False, "op": "planner.plan.create", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
+
+    gd = await planner_guidance()
+    out = {"ok": bool(res.get("ok")), "op": "planner.plan.create", "data": (res.get("data") or {})}
+    out["data"]["warnings"] = warnings
+    out["data"]["guidance_digest"] = (gd.get("data") or {})
+    if not res.get("ok"):
+        out["error"] = res.get("error")
+    return out
 
 @mcp.tool()
 async def planner_monthly_filter(year: int | str, month: int | str, student_id: Any = None, spreadsheet_id: Any = None) -> dict:
@@ -960,6 +1021,67 @@ async def planner_plan_targets(student_id: Any = None, spreadsheet_id: Any = Non
     rows_with_book = set(int(it.get("row")) for it in id_items if it.get("row"))
     row_to_book = {int(it["row"]): it.get("book_id") for it in id_items if it.get("row")}
 
+    # 目次/numbering 情報を書籍ごとに収集（簡易）
+    unique_book_ids = [it.get("book_id") for it in id_items if it.get("book_id")]
+    book_meta: dict[str, dict] = {}
+    if unique_book_ids:
+        try:
+            bres = await books_get(book_ids=list(dict.fromkeys(unique_book_ids)))
+            if isinstance(bres, dict) and bres.get("ok"):
+                for b in ((bres.get("data") or {}).get("books") or []):
+                    bid = b.get("id")
+                    chapters = (((b.get("structure") or {}).get("chapters")) or [])
+                    sym = None
+                    max_end = None
+                    starts: list[int] = []
+                    ends: list[int] = []
+                    for ch in chapters:
+                        rng = ch.get("range") or {}
+                        s = rng.get("start")
+                        e = rng.get("end")
+                        try:
+                            if s is not None: starts.append(int(s))
+                            if e is not None: ends.append(int(e))
+                        except Exception:
+                            pass
+                        if not sym:
+                            sym = (ch.get("numbering") or "").strip() or None
+                    max_end = max(ends) if ends else None
+                    # numbering モード推定: リセット か キャリー
+                    mode = None
+                    if len(starts) >= 2 and len(ends) >= 1:
+                        try:
+                            if starts[1] == 1:
+                                mode = "reset"
+                            elif starts[1] == (ends[0] + 1):
+                                mode = "carry"
+                        except Exception:
+                            pass
+                    book_meta[str(bid)] = {"symbol": sym or "問", "max_end": max_end, "mode": mode}
+        except Exception:
+            pass
+
+    def _parse_prev_end(text: str) -> tuple[int | None, str | None]:
+        if not text:
+            return (None, None)
+        s = str(text)
+        # 優先: 範囲表記 X~Y
+        import re
+        m = re.findall(r"(\d+)\s*~\s*(\d+)", s)
+        if m:
+            try:
+                return (int(m[-1][1]), None)
+            except Exception:
+                return (None, None)
+        # 次: 数字の最後を採用
+        m2 = re.findall(r"(\d+)", s)
+        if m2:
+            try:
+                return (int(m2[-1]), None)
+            except Exception:
+                return (None, None)
+        return (None, None)
+
     # 週ごとの maps
     wk_metrics: dict[int, dict[int, dict]] = {}
     for wk in ((mets.get("data") or {}).get("weeks") or []):
@@ -990,13 +1112,37 @@ async def planner_plan_targets(student_id: Any = None, spreadsheet_id: Any = Non
                 if pj and str(pj.get("plan_text") or "").strip():
                     prev_hint = str(pj.get("plan_text"))
                     break
+            bid = row_to_book.get(r)
+            ga = (metrics_rows.get(r) or {}).get("guideline_amount")
+            # 簡易サジェスト（prev_range_hint と TOC から計算）
+            prev_end, _ = _parse_prev_end(prev_hint)
+            meta = book_meta.get(str(bid) if bid else "", {})
+            sym = meta.get("symbol") or "問"
+            max_end = meta.get("max_end")
+            start = (int(prev_end) + 1) if isinstance(prev_end, int) else 1
+            suggested_text = None
+            end_of_book = False
+            if isinstance(ga, (int, float)) and ga:
+                try:
+                    e = start + int(ga) - 1
+                    if isinstance(max_end, int) and e > max_end:
+                        e = max_end
+                        end_of_book = True
+                    suggested_text = f"{sym}{start}~{e}" + (" ★完了！" if end_of_book else "")
+                except Exception:
+                    suggested_text = None
+
             targets.append({
                 "week_index": wi,
                 "row": r,
-                "book_id": row_to_book.get(r),
+                "book_id": bid,
                 "weekly_minutes": weekly_minutes,
-                "guideline_amount": (metrics_rows.get(r) or {}).get("guideline_amount"),
+                "guideline_amount": ga,
                 "prev_range_hint": prev_hint,
+                "numbering_symbol": sym,
+                "suggested_plan_text": suggested_text,
+                "suggestion_confidence": "medium" if meta.get("mode") in ("reset","carry") else "low",
+                "end_of_book": end_of_book,
             })
 
     return {"ok": True, "op": "planner.plan.targets", "data": {"week_count": week_count, "targets": targets}}
@@ -1045,6 +1191,14 @@ async def planner_guidance() -> dict:
                     "finish_marker": "★完了！",
                     "consult_marker": "★相談",
                     "rule": "参考書の範囲を完了する週は末尾に★完了！を付与。以降の週は★相談にし、ユーザー方針が示されたら従う。"
+                },
+                "toc_resolution": {
+                    "default": "原則は A列の book_id に基づき、該当書籍の目次(TOC)と numbering を取得して計画を作成する。",
+                    "override_when_title_points_else": "ただし、C列のタイトルや既存計画文面が明らかに別の参考書名を指しており、その流れで取り組む指示になっている場合は、その参考書の情報を books_get で取得し、その書籍のTOCに基づいて計画を作成する（運用上の意図を優先）。",
+                    "examples": [
+                        "A列は gMB017(青チャート)だがC列タイトルや文面が '白チャート数2' と明示→白チャートのTOC/numberingを取得して計画",
+                        "A列は '核心' だが文面が '入門英文問題精講' の範囲指示→入門英文問題精講のTOCに従う"
+                    ]
                 }
             },
             "format": {
@@ -1070,8 +1224,8 @@ async def planner_guidance() -> dict:
                 ],
                 "write": [
                     "planner_plan_targets で 'A非空・週間時間非空・未入力' の候補を抽出",
-                    "planner_plan_propose(items=[…]) で一括プレビュー（effectsを人間確認）",
-                    "planner_plan_confirm(confirm_token) で一括確定"
+                    "候補から items を作成（週混在可、suggested_plan_text を叩き台に）",
+                    "planner_plan_create(items) で一括作成（高速）。data.warnings と guidance_digest を必ず確認"
                 ]
             }
         }
