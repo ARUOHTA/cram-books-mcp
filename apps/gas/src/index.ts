@@ -26,6 +26,14 @@ import {
   studentsUpdate as studentsUpdateHandler,
   studentsDelete as studentsDeleteHandler,
 } from "./handlers/students";
+import {
+  plannerIdsList as plannerIdsListHandler,
+  plannerDatesGet as plannerDatesGetHandler,
+  plannerDatesSet as plannerDatesSetHandler,
+  plannerMetricsGet as plannerMetricsGetHandler,
+  plannerPlanGet as plannerPlanGetHandler,
+  plannerPlanSet as plannerPlanSetHandler,
+} from "./handlers/planner";
 
 /**
  * 手動承認（初回のみ実行）
@@ -68,6 +76,13 @@ export function doGet(e: GoogleAppsScript.Events.DoGet): GoogleAppsScript.Conten
         case "students.create": return studentsCreateHandler(req);
         case "students.update": return studentsUpdateHandler(req);
         case "students.delete": return studentsDeleteHandler(req);
+        // planner (weekly)
+        case "planner.ids_list":   return plannerIdsListHandler(req);
+        case "planner.dates.get":  return plannerDatesGetHandler(req);
+        case "planner.dates.set":  return plannerDatesSetHandler(req);
+        case "planner.metrics.get":return plannerMetricsGetHandler(req);
+        case "planner.plan.get":   return plannerPlanGetHandler(req);
+        case "planner.plan.set":   return plannerPlanSetHandler(req);
         case "table.read":      return (isTableReadEnabled() ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
         case "ping":         return ok("ping", { status: "ok", timestamp: new Date().toISOString() });
         default:              return ng(req.op || "unknown", "UNKNOWN_OP", "Unsupported op");
@@ -100,6 +115,13 @@ export function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Cont
       case "students.create": return createJsonResponse(studentsCreateHandler(req));
       case "students.update": return createJsonResponse(studentsUpdateHandler(req));
       case "students.delete": return createJsonResponse(studentsDeleteHandler(req));
+      // planner (weekly)
+      case "planner.ids_list":    return createJsonResponse(plannerIdsListHandler(req));
+      case "planner.dates.get":   return createJsonResponse(plannerDatesGetHandler(req));
+      case "planner.dates.set":   return createJsonResponse(plannerDatesSetHandler(req));
+      case "planner.metrics.get": return createJsonResponse(plannerMetricsGetHandler(req));
+      case "planner.plan.get":    return createJsonResponse(plannerPlanGetHandler(req));
+      case "planner.plan.set":    return createJsonResponse(plannerPlanSetHandler(req));
       case "table.read":      return createJsonResponse(isTableReadEnabled() ? tableRead(req) : ng("table.read","DISABLED","table.read is disabled (set ENABLE_TABLE_READ=true in ScriptProperties)"));
       default:               return createJsonResponse(ng(req.op || "unknown", "UNKNOWN_OP", "Unsupported op"));
     }

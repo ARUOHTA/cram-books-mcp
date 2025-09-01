@@ -4,6 +4,7 @@
  */
 import { CONFIG } from "../config";
 import { booksFind, booksGet, booksFilter, booksCreate, booksUpdate, booksDelete } from "../handlers/books";
+import { plannerIdsList, plannerDatesGet, plannerMetricsGet, plannerPlanGet } from "../handlers/planner";
 
 function logJson(label: string, x: any) {
   try { console.log(label + ":\n" + JSON.stringify(x, null, 2)); } catch (_) { console.log(label, x); }
@@ -89,3 +90,13 @@ export function testBooksAll(): void {
   testBooksFilterMath();
 }
 
+// === Planner 開発用: 実スプレッドシートIDを指定して軽く読み取りを検証 ===
+export function testPlannerReadSample(): void {
+  const spreadsheet_id = Browser.inputBox("週間計画のSpreadsheet IDを入力", Browser.Buttons.OK_CANCEL);
+  if (!spreadsheet_id || spreadsheet_id === "cancel") { console.log("cancelled"); return; }
+  const req = { spreadsheet_id } as any;
+  const ids = plannerIdsList(req); logJson("planner.ids_list", ids);
+  const dates = plannerDatesGet(req); logJson("planner.dates.get", dates);
+  const mets = plannerMetricsGet(req); logJson("planner.metrics.get", mets);
+  const plans = plannerPlanGet(req); logJson("planner.plan.get", plans);
+}

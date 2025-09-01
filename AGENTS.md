@@ -198,6 +198,35 @@ uv run python server.py
     "confidence": 0.645
   }
 }
+
+## 🗓️ 週間計画（Planner）API 概要（最小権限）
+
+- シート名は原則「週間管理」。行は 4〜30 を実データとみなす。
+- 一部の環境では「週間計画」名のシートが存在するため、両方を検出対象にしています。
+- A列は `<月コード><book_id>`（例: 258gET007）。`book_id` は gID とは限らない（非gIDも保持）。
+- 週列マップ: 週1=E/F/G/H, 週2=M/N/O/P, 週3=U/V/W/X, 週4=AC/AD/AE/AF, 週5=AK/AL/AM/AN。
+- 週開始日: D1→L1→T1→AB1→AJ1（+7日）。
+
+GAS（WebApp）で提供する op:
+- `planner.ids_list` 読み: A4:D30 を返却（raw_code, month_code, book_id, subject(B), title(C), guideline_note(D)）。
+- `planner.dates.get` 読み: [D1,L1,T1,AB1,AJ1] の displayValue。
+- `planner.dates.set` 書き: D1 のみ（入力は YYYY-MM-DD）。
+- `planner.metrics.get` 読み: 週ごとの E/F/G を行4〜30で返す。
+- `planner.plan.get` 読み: 週ごとの計画セル（H/P/X/AF/AN）を返す（改行保持）。
+- `planner.plan.set` 書き: 週×行 または 週×book_id 指定で計画セルを書き込み。
+  - 前提: 該当行のA列が非空、かつ対象週の「週間時間」セルが非空。
+  - 既定: overwrite=false（空欄のみ埋める）。明示時のみ上書き。
+  - 上限: 52文字（超過はエラー）。
+
+MCP（Cloud Run）は上記をラップし、propose→confirm の二段階ツールを公開:
+- `planner_get`（ids/dates/metrics/plan を集約するユーティリティは追って追加予定）。
+- `planner_plan_propose` / `planner_plan_confirm`
+- `planner_dates_propose` / `planner_dates_confirm`
+
+実装・運用の注意:
+- ids_list は A列の最初の空行で走査を打ち切る（上から詰めて入力される運用）。
+- `book_id` 一意（同月内で重複しない）。非gIDも現れるためタイトル(C列)を補助情報として返す。
+- 書き込み対象は計画セルと D1 のみ。A/E/F/G/L/T/AB/AJ は読み取りのみ。
 ```
 
 #### books.get
