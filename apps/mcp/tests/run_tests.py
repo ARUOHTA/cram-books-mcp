@@ -17,6 +17,14 @@ from apps.mcp.server import (
     books_delete,
     books_list,
     tools_help,
+    planner_ids_list,
+    planner_dates_get,
+    planner_dates_propose,
+    planner_dates_confirm,
+    planner_metrics_get,
+    planner_plan_get,
+    planner_plan_propose,
+    planner_plan_confirm,
 )
 
 
@@ -96,6 +104,63 @@ async def main() -> None:
     print("books_delete confirmed")
 
     print("ALL MCP TESTS PASSED ✔")
+
+    # Planner E2E
+    student_id = os.environ.get("STUDENT_ID")
+    spreadsheet_id = os.environ.get("SPREADSHEET_ID")
+    # 自動選定: STUDENT_ID 未指定なら在塾生から先頭1〜3名を取得
+    auto_students: list[str] = []
+    if not (student_id or spreadsheet_id):
+        try:
+            from apps.mcp.server import students_list  # type: ignore
+            sl = await students_list(include_all=False, limit=20)
+            if sl.get("ok"):
+                cand = [s for s in sl["data"]["students"] if s.get("id")]  # type: ignore
+                # planner_sheet_id を持つ生徒を優先
+                with_planner = [s for s in cand if s.get("planner_sheet_id")]
+                take = with_planner or cand
+                auto_students = [s.get("id") for s in take[:3] if s.get("id")]
+        except Exception:
+            pass
+    if student_id or spreadsheet_id or auto_students:
+        print("\n-- Planner tests (optional) --")
+        for sid in ([student_id] if student_id else auto_students) or [None]:
+            ids = await planner_ids_list(student_id=sid, spreadsheet_id=spreadsheet_id)
+            assert ids.get("ok"), f"planner_ids_list failed: {ids}"
+            items = (ids.get("data") or {}).get("items") or []
+            print(f"ids_list[{sid}] n=", len(items))
+
+            dget = await planner_dates_get(student_id=sid, spreadsheet_id=spreadsheet_id)
+            assert dget.get("ok"), f"planner_dates_get failed: {dget}"
+            print("dates_get:", dget.get("data"))
+
+            mets = await planner_metrics_get(student_id=sid, spreadsheet_id=spreadsheet_id)
+            assert mets.get("ok"), f"planner_metrics_get failed: {mets}"
+            print("metrics_get: weeks=", len((mets.get("data") or {}).get("weeks") or []))
+
+            plans = await planner_plan_get(student_id=sid, spreadsheet_id=spreadsheet_id)
+            assert plans.get("ok"), f"planner_plan_get failed: {plans}"
+            print("plan_get: weeks=", len((plans.get("data") or {}).get("weeks") or []))
+
+            # Write preview only on empty cell; do not confirm
+            target = None
+            weeks = (plans.get("data") or {}).get("weeks") or []
+            for wk in weeks:
+                for it in wk.get("items", []):
+                    if not it.get("plan_text"):
+                        target = (wk.get("index") or wk.get("week_index")), it.get("row")
+                        break
+                if target:
+                    break
+            if target:
+                wk_index, row = target
+                pp = await planner_plan_propose(week_index=int(wk_index), row=int(row), plan_text="テスト", overwrite=False, student_id=sid, spreadsheet_id=spreadsheet_id)
+                assert pp.get("ok"), f"planner_plan_propose failed: {pp}"
+                print("plan_propose ok (not confirming)")
+            else:
+                print("no empty cell found for plan_propose; skipping write preview")
+    else:
+        print("(planner tests skipped: set STUDENT_ID or SPREADSHEET_ID to enable)")
 
 
 if __name__ == "__main__":

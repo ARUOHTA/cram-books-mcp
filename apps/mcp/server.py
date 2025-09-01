@@ -74,6 +74,18 @@ def _pick_col(headers: list[str], candidates: Iterable[str]) -> int:
             continue
     return -1
 
+# --- Simple in-memory preview cache for propose→confirm ---
+_PREVIEW_CACHE: dict[str, dict] = {}
+def _preview_put(payload: dict) -> str:
+    import uuid
+    token = str(uuid.uuid4())
+    _PREVIEW_CACHE[token] = payload
+    return token
+def _preview_get(token: str) -> dict | None:
+    return _PREVIEW_CACHE.get(token)
+def _preview_pop(token: str) -> dict | None:
+    return _PREVIEW_CACHE.pop(token, None)
+
 @mcp.tool()
 async def books_find(query: Any) -> dict:
     """参考書を曖昧検索します（GAS WebApp: books.find）。
@@ -611,8 +623,233 @@ async def tools_help() -> dict:
             "example_preview": {"book_id":"gMB017"},
             "example_confirm": {"book_id":"gMB017","confirm_token":"…"},
         },
+        {
+            "name": "planner_ids_list",
+            "desc": "A4:D30のID+教科+タイトル+進め方メモを取得（単一月シート）",
+            "args": {"student_id": "string?", "spreadsheet_id": "string?"},
+            "example": {"student_id": "S123"},
+        },
+        {
+            "name": "planner_dates_get",
+            "desc": "週開始日 D1/L1/T1/AB1/AJ1 を取得",
+            "args": {"student_id": "string?", "spreadsheet_id": "string?"},
+        },
+        {
+            "name": "planner_dates_propose",
+            "desc": "D1 の変更プレビュー（confirm で確定）",
+            "args": {"start_date": "YYYY-MM-DD", "student_id": "string?", "spreadsheet_id": "string?"},
+        },
+        {
+            "name": "planner_dates_confirm",
+            "desc": "D1 変更の確定",
+            "args": {"confirm_token": "string"},
+        },
+        {
+            "name": "planner_metrics_get",
+            "desc": "週ごとの E/F/G（週間時間/単位処理量/目安処理量）を取得",
+            "args": {"student_id": "string?", "spreadsheet_id": "string?"},
+        },
+        {
+            "name": "planner_plan_get",
+            "desc": "計画セル（H/P/X/AF/AN, 行4〜30）を取得（改行保持）",
+            "args": {"student_id": "string?", "spreadsheet_id": "string?"},
+        },
+        {
+            "name": "planner_plan_propose",
+            "desc": "計画セルのプレビュー（overwrite規則と52文字上限を前提）",
+            "args": {"week_index": "1..5", "plan_text": "string", "overwrite": "bool?", "book_id": "string?", "row": "number?", "student_id": "string?", "spreadsheet_id": "string?"},
+        },
+        {
+            "name": "planner_plan_confirm",
+            "desc": "計画セルの確定（proposeトークン必須）",
+            "args": {"confirm_token": "string"},
+        },
+        {
+            "name": "planner_guidance",
+            "desc": "LLM向け：週間管理の計画作成ガイド（書式/上限/前提/手順）",
+            "args": {},
+        },
     ]
     return {"ok": True, "op": "tools.help", "data": {"tools": tools}}
+
+
+# ===== Planner (weekly) tools =====
+
+@mcp.tool()
+async def planner_ids_list(student_id: Any = None, spreadsheet_id: Any = None) -> dict:
+    """A4:D30 を読み取り、raw_code/月コード/book_id/教科/タイトル/進め方メモを返します。
+
+    引数: student_id か spreadsheet_id（どちらか必須）
+    """
+    sid = _coerce_str(student_id, ("student_id","id"))
+    spid = _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id"))
+    if not (sid or spid):
+        return {"ok": False, "op": "planner.ids_list", "error": {"code": "BAD_INPUT", "message": "student_id or spreadsheet_id is required"}}
+    payload = {"op": "planner.ids_list"}
+    if sid: payload["student_id"] = sid
+    if spid: payload["spreadsheet_id"] = spid
+    return await _post(payload)
+
+@mcp.tool()
+async def planner_dates_get(student_id: Any = None, spreadsheet_id: Any = None) -> dict:
+    payload: dict[str, Any] = {"op": "planner.dates.get"}
+    sid = _coerce_str(student_id, ("student_id","id"))
+    spid = _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id"))
+    if sid: payload["student_id"] = sid
+    if spid: payload["spreadsheet_id"] = spid
+    return await _post(payload)
+
+@mcp.tool()
+async def planner_dates_propose(start_date: str, student_id: Any = None, spreadsheet_id: Any = None) -> dict:
+    """D1 を変更するプレビューを作成（差分だけを返し、確定は confirm で）。"""
+    get = await planner_dates_get(student_id=student_id, spreadsheet_id=spreadsheet_id)
+    if not isinstance(get, dict) or not get.get("ok"):
+        return {"ok": False, "op": "planner.dates.propose", "error": {"code": "UPSTREAM", "message": str(get)}}
+    before = (get.get("data") or {}).get("week_starts")
+    token = _preview_put({
+        "op": "planner.dates.set",
+        "student_id": _coerce_str(student_id, ("student_id","id")),
+        "spreadsheet_id": _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id")),
+        "start_date": start_date,
+    })
+    return {"ok": True, "op": "planner.dates.propose", "data": {"confirm_token": token, "effects": [{"cell": "D1", "before": before[0] if isinstance(before, list) else None, "after": start_date}]}}
+
+@mcp.tool()
+async def planner_dates_confirm(confirm_token: str) -> dict:
+    payload = _preview_pop(confirm_token)
+    if not payload:
+        return {"ok": False, "op": "planner.dates.confirm", "error": {"code": "CONFIRM_EXPIRED", "message": "invalid token"}}
+    payload["op"] = "planner.dates.set"
+    return await _post(payload)
+
+@mcp.tool()
+async def planner_metrics_get(student_id: Any = None, spreadsheet_id: Any = None) -> dict:
+    payload: dict[str, Any] = {"op": "planner.metrics.get"}
+    sid = _coerce_str(student_id, ("student_id","id"))
+    spid = _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id"))
+    if sid: payload["student_id"] = sid
+    if spid: payload["spreadsheet_id"] = spid
+    return await _post(payload)
+
+@mcp.tool()
+async def planner_plan_get(student_id: Any = None, spreadsheet_id: Any = None) -> dict:
+    payload: dict[str, Any] = {"op": "planner.plan.get"}
+    sid = _coerce_str(student_id, ("student_id","id"))
+    spid = _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id"))
+    if sid: payload["student_id"] = sid
+    if spid: payload["spreadsheet_id"] = spid
+    return await _post(payload)
+
+@mcp.tool()
+async def planner_plan_propose(week_index: int, plan_text: str, overwrite: bool | None = None, *, book_id: str | None = None, row: int | None = None, student_id: Any = None, spreadsheet_id: Any = None) -> dict:
+    """計画セル（週×行 or 週×book_id）を書き込むプレビューを作成します。
+
+    ルール（重要）:
+    - 既定: overwrite=false（空欄のみ埋める）。明示時のみ上書き。
+    - 文字数上限: 52文字（Unicode）。超える場合は要約・分割を検討。
+    - 書込前提: 行Aが非空、かつその週の「週間時間」が非空のセルのみ対象。
+    - 書式ガイド（例）: 「No.951~1050」「Lesson11~12」「数A：9~21,29~46」「英文1~2 演習・精読・音読」。
+    - 記述は簡潔に。波線「~」で範囲、カンマで複数範囲、必要なら改行を使用。
+    - 非gID行ではC列のタイトル・D列の進め方メモを参考に、無理に正規化しない。
+
+    提案のみを作成し、最終反映は planner_plan_confirm で行います。
+    """
+    if not (book_id or row):
+        return {"ok": False, "op": "planner.plan.propose", "error": {"code": "BAD_INPUT", "message": "book_id or row is required"}}
+    # 現在値を取得して diff を作成
+    current = await planner_plan_get(student_id=student_id, spreadsheet_id=spreadsheet_id)
+    if not isinstance(current, dict) or not current.get("ok"):
+        return {"ok": False, "op": "planner.plan.propose", "error": {"code": "UPSTREAM", "message": str(current)}}
+    weeks = (current.get("data") or {}).get("weeks") or []
+    before_text: str | None = None
+    cell = None
+    try:
+        # book_id 指定時は ids_list で行を解決
+        target_row = row
+        if book_id and not target_row:
+            ids = await planner_ids_list(student_id=student_id, spreadsheet_id=spreadsheet_id)
+            if ids.get("ok"):
+                for it in (ids["data"]["items"] or []):  # type: ignore
+                    if it.get("book_id") == book_id:
+                        target_row = it.get("row")
+                        break
+        # 週から列を拾い、rows配列から before を取り出す
+        wk = next(w for w in weeks if int(w.get("index", w.get("week_index"))) == int(week_index))
+        col = wk.get("column")
+        if target_row:
+            for item in wk.get("items", []):
+                if int(item.get("row")) == int(target_row):
+                    before_text = item.get("plan_text")
+                    break
+            cell = f"{col}{target_row}"
+    except Exception:
+        pass
+    payload = {
+        "op": "planner.plan.set",
+        "student_id": _coerce_str(student_id, ("student_id","id")),
+        "spreadsheet_id": _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id")),
+        "week_index": week_index,
+        "plan_text": plan_text,
+        "overwrite": bool(overwrite) if overwrite is not None else False,
+    }
+    if book_id: payload["book_id"] = book_id
+    if row: payload["row"] = row
+    token = _preview_put(payload)
+    return {"ok": True, "op": "planner.plan.propose", "data": {"confirm_token": token, "effects": [{"cell": cell, "before": {"plan_text": before_text}, "after": {"plan_text": plan_text}}]}}
+
+@mcp.tool()
+async def planner_plan_confirm(confirm_token: str) -> dict:
+    payload = _preview_pop(confirm_token)
+    if not payload:
+        return {"ok": False, "op": "planner.plan.confirm", "error": {"code": "CONFIRM_EXPIRED", "message": "invalid token"}}
+    payload["op"] = "planner.plan.set"
+    return await _post(payload)
+
+@mcp.tool()
+async def planner_guidance() -> dict:
+    """LLM向け：週間管理シートの計画作成ガイドを返します。
+
+    概要:
+    - シート: 「週間管理」。行4〜30、A列= <月コード><book_id>（例: 258gET007）。月コードは3/4桁（261/2601）。単一月のみ。
+    - 週列: 週1=E/F/G/H、週2=M/N/O/P、週3=U/V/W/X、週4=AC/AD/AE/AF、週5=AK/AL/AM/AN。計画は H/P/X/AF/AN。
+    - 開始日: D1→+7でL1/T1/AB1/AJ1。
+    - 前提: A[row]非空、かつ対象週の「週間時間」非空のときのみ計画を作成。
+    - 書込既定: 空欄のみ埋める（overwrite=false）。上書きは明示時のみ。
+    - 上限: 52文字/セル。超過は要約・分割（次週など）で調整。
+    - 書式: 範囲は「~」、複数はカンマ/改行、自由記述は簡潔に。
+    - 非gID: C列タイトル/D列ガイドラインを尊重（無理な正規化をしない）。
+    - 推奨手順: ids_list→metrics_get→plan_get→plan_propose→（承認後）plan_confirm。
+    """
+    return {
+        "ok": True,
+        "op": "planner.guidance",
+        "data": {
+            "sheet": {
+                "name": "週間管理",
+                "rows": "4-30",
+                "id_column": "A: <month_code><book_id> (3/4桁月コード許容)",
+                "weeks": {
+                    "1": {"time":"E","unit":"F","guide":"G","plan":"H"},
+                    "2": {"time":"M","unit":"N","guide":"O","plan":"P"},
+                    "3": {"time":"U","unit":"V","guide":"W","plan":"X"},
+                    "4": {"time":"AC","unit":"AD","guide":"AE","plan":"AF"},
+                    "5": {"time":"AK","unit":"AL","guide":"AM","plan":"AN"}
+                },
+                "week_starts": ["D1","L1","T1","AB1","AJ1"]
+            },
+            "policy": {
+                "preconditions": ["A[row]非空","週間時間セル非空"],
+                "overwrite_default": False,
+                "max_chars": 52
+            },
+            "format": {
+                "range": "~ を用いる (No.951~1050, Lesson11~12)",
+                "multi": "カンマ/改行で複数範囲 (9~21,29~46)",
+                "freeform": "短く具体的に (演習・精読・音読)"
+            },
+            "nongid": {"respect_title": True, "use_guideline_note": True}
+        }
+    }
 
 if __name__ == "__main__":
     import uvicorn
