@@ -806,6 +806,25 @@ async def planner_plan_confirm(confirm_token: str) -> dict:
     return await _post(payload)
 
 @mcp.tool()
+async def planner_monthly_filter(year: int | str, month: int | str, student_id: Any = None, spreadsheet_id: Any = None) -> dict:
+    """月間管理から指定年月(B=年下2桁, C=月)の実績を取得（読み取り専用）。
+
+    引数:
+    - year: 25 または 2025（4桁可: 2000を引いて2桁に正規化）
+    - month: 1..12
+    - student_id または spreadsheet_id のいずれか
+    """
+    payload: dict[str, Any] = {"op": "planner.monthly.filter", "year": year, "month": month}
+    sid = _coerce_str(student_id, ("student_id","id"))
+    spid = _coerce_str(spreadsheet_id, ("spreadsheet_id","sheet_id","id"))
+    if sid: payload["student_id"] = sid
+    if spid: payload["spreadsheet_id"] = spid
+    try:
+        return await _post(payload)
+    except Exception as e:
+        return {"ok": False, "op": "planner.monthly.filter", "error": {"code": "HTTP_POST_ERROR", "message": str(e)}}
+
+@mcp.tool()
 async def planner_guidance() -> dict:
     """LLM向け：週間管理シートの計画作成ガイドを返します。
 
