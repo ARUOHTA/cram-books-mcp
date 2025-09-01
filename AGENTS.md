@@ -58,6 +58,55 @@
 - 安全運用: Claude用とChatGPT用でCloud Runサービスを分離することを推奨（例: `cram-books-mcp` と `cram-books-mcp-chatgpt`）。
 - 拡張計画（任意）: id前置（`book:`/`student:`/`weekly:`/`monthly:`）により、fetchで各データ源へ振り分け可能。searchは簡易クエリ（subject/title/id/limit）を解釈して横断メタサーチ化。
 
+## 🧭 週間管理（Planner・Weekly）最新仕様（LLM向け）
+
+- シート: 正式名称「週間管理」（互換: 「週間計画」も自動検出）。行4〜30がデータ領域。
+- A列: `<月コード><book_id>`（3/4桁: 258/2510/261/2601）。
+- 列束: 週1=E/F/G/H、週2=M/N/O/P、週3=U/V/W/X、週4=AC/AD/AE/AF、週5=AK/AL/AM/AN。
+- 週開始日: D1 → +7 で L1/T1/AB1/AJ1（書込可なのは D1 のみ）。
+
+MCP ツール（Weekly）
+- `planner_ids_list`（A〜D 読み）: raw_code→month_code+book_id に分離、B=subject、C=title、D=guideline_note。
+- `planner_dates_get|propose|confirm`（週開始日の取得／D1変更の二段階）。
+- `planner_plan_get`（統合版）: 計画セルに metrics を統合して返却。
+  - weeks.items[].plan_text に加え、`weekly_minutes`（E等）、`unit_load`（F等）、`guideline_amount`（G等）を同梱。
+- `planner_plan_targets`（新）: 書込み候補の自動抽出（A非空・週間時間非空・計画未入力のみ）。
+- `planner_plan_propose / planner_plan_confirm`（統一 I/F）:
+  - 単体: `{week_index, row|book_id, plan_text, overwrite?}`
+  - 複数: `{items:[{week_index, row|book_id, plan_text, overwrite?}, …], overwrite?}`
+  - 戻り: `confirm_token` は単体・一括どちらにも対応。confirm は単体/一括を自動判別し、`{confirmed, results[]}` を返却。
+
+バリデーションと安全策
+- 書込前提: A[row]非空 かつ 対象週の「週間時間」セル非空。上記を満たさないセルはtargetsに出さず、propose時も弾く。
+- 文字数上限: 計画セルは最大52文字（改行可）。超過時はエラーと警告（短縮を指示）。
+- 上書き既定: overwrite=false（空欄のみ埋める）。既存テキストを変更する場合は true を明示。
+
+推奨フロー（少ない呼び出しで安全）
+1) `planner_plan_get` → 計画/metrics を一括取得（週数は `planner_dates_get` で week_count を把握）
+2) `planner_plan_targets` → 今月の「埋めるべきセル」を自動抽出
+3) `planner_plan_propose`（items で一括）→ effects（差分）を人間確認
+4) `planner_plan_confirm`（token）→ 一括確定
+
+プロンプトの運用ルール（要点）
+- 相談ポリシー: 次週で書籍の終端に到達/超過、前週との重複/飛び、目安量に対して過不足が大きい等は、勝手に決めずにユーザーへ確認する。
+- 週数遵守: `planner_dates_get` の week_count（4/5）に合わせて提案。存在しない週は作成しない。
+- 表記と上限: 52文字以内、範囲は「~」、複数は「,」や改行。非gIDはC/Dを尊重し無理に正規化しない。
+
+パフォーマンス
+- 単体で44セルを繰返すのではなく、`planner_plan_propose(items=[…])` で一括プレビュー→ `planner_plan_confirm` 一括確定に統一。呼び出し回数と誤操作を大幅削減。
+
+テスト
+- GAS: `testPlannerBulkSpeedGAS()`（小規模ベンチ: 週2の空欄10件程度を書き/戻し）
+- MCP: `apps/mcp/tests/run_tests.py` に一括(items)のストレス・往復（書き→即時ロールバック）を追加。環境変数 `BULK_N` で件数を調整。
+
+変更履歴（最近）
+- plan_get に metrics を統合（weekly_minutes/unit_load/guideline_amount）。
+- 書込み候補の自動抽出: `planner_plan_targets` を追加（GAS変更なし、MCP内合成）。
+- 提案/確定の統一I/F: `planner_plan_propose/confirm` が items[] を受け付け、一括トークンに対応。旧bulkツールは撤廃。
+
+備考
+- GASは最小APIのまま（単発 write のみ）。まとめ処理・整合・差分はMCP側で吸収。
+
 
 ## 📁 プロジェクト構造
 

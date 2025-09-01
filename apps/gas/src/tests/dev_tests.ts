@@ -4,6 +4,7 @@
  */
 import { CONFIG } from "../config";
 import { booksFind, booksGet, booksFilter, booksCreate, booksUpdate, booksDelete } from "../handlers/books";
+import { plannerMetricsGet, plannerPlanGet, plannerPlanSet } from "../handlers/planner";
 import { plannerIdsList, plannerDatesGet, plannerMetricsGet, plannerPlanGet } from "../handlers/planner";
 
 function logJson(label: string, x: any) {
@@ -99,4 +100,34 @@ export function testPlannerReadSample(): void {
   const dates = plannerDatesGet(req); logJson("planner.dates.get", dates);
   const mets = plannerMetricsGet(req); logJson("planner.metrics.get", mets);
   const plans = plannerPlanGet(req); logJson("planner.plan.get", plans);
+}
+
+// まとめ書き（GAS APIベンチ・小規模）: 週2の空欄10件までを書き→即時ロールバック
+export function testPlannerBulkSpeedGAS(): void {
+  const spreadsheet_id = Browser.inputBox("週間計画のSpreadsheet IDを入力 (小規模ベンチ)", Browser.Buttons.OK_CANCEL);
+  if (!spreadsheet_id || spreadsheet_id === "cancel") { console.log("cancelled"); return; }
+  const req = { spreadsheet_id } as any;
+  const mets = plannerMetricsGet(req).data?.weeks || [];
+  const plans = plannerPlanGet(req).data?.weeks || [];
+  const wk2m = (mets.find((w:any)=>w.week_index===2)?.items)||[];
+  const wk2p = (plans.find((w:any)=>w.week_index===2)?.items)||[];
+  const byRow: Record<number, any> = {}; wk2p.forEach((it:any)=> byRow[Number(it.row)] = it);
+  const targets: number[] = [];
+  wk2m.forEach((m:any)=>{
+    const r = Number(m.row);
+    if (targets.length>=10) return;
+    if (m.weekly_minutes!=null && String(m.weekly_minutes)!=="" && (!byRow[r] || String(byRow[r].plan_text).trim()==="")) targets.push(r);
+  });
+  const t0 = Date.now();
+  targets.forEach((r)=>{
+    const res = plannerPlanSet({ spreadsheet_id, week_index:2, row:r, plan_text:"テスト", overwrite:false } as any);
+    if (!res.ok) console.log("set failed", r, res);
+  });
+  const t1 = Date.now();
+  targets.forEach((r)=>{
+    const res = plannerPlanSet({ spreadsheet_id, week_index:2, row:r, plan_text:"", overwrite:true } as any);
+    if (!res.ok) console.log("revert failed", r, res);
+  });
+  const t2 = Date.now();
+  console.log(`GAS bulk (n=${targets.length}) write=${t1-t0}ms revert=${t2-t1}ms total=${t2-t0}ms`);
 }

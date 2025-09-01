@@ -92,6 +92,12 @@ scripts/deploy_mcp.sh              # EXEC_URL は apps/gas/.prod_deploy_id を�
 - books_list(limit?) 親行一覧（id/subject/title のみ）
 - tools_help() 公開ツールの簡易ヘルプ
 
+### Planner（週間管理）
+- planner_ids_list / planner_dates_get|propose|confirm / planner_plan_get|propose|confirm / planner_plan_targets / planner_guidance
+  - plan_get は metrics（weekly_minutes/unit_load/guideline_amount）を同梱
+  - plan_propose は単体/複数（items[]）の両方に対応、confirm は単体/一括を自動判別
+  - 書込制約: A非空・週間時間非空・最大52文字、overwrite=falseが既定
+
 注意（create/update; LLM向け）
 - chapters は「最終形」を完全指定（追記ではない）
 - numbering（番号の数え方）は必ず埋める（空欄禁止）
@@ -126,6 +132,11 @@ export EXEC_URL="https://script.google.com/macros/s/<DEPLOY_ID>/exec"
 uv run python apps/mcp/tests/run_tests.py
 ```
 内容: tools_help, books_list, find, get(単/複), filter, create→update(プレビュー→確定)→delete(プレビュー→確定)
+および planner（ids/dates/plan_get(統合) / plan_propose(items) / plan_confirm）の疎通
+
+### まとめ処理の小ベンチ（任意）
+- GAS: `testPlannerBulkSpeedGAS()`（週2の空欄最大10件を write→revert。所要時間をログ）
+- MCP: `BULK_N=12 uv run python apps/mcp/tests/run_tests.py`（targets→itemsで一括 propose→confirm→revert。所要時間を出力）
 
 ## 運用トグル（ScriptProperties; GAS）
 - ENABLE_FIND_DEBUG=true|false（既定 false）: find 上位候補をログに出力
