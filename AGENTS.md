@@ -71,10 +71,12 @@ MCP ツール（Weekly）
 - `planner_plan_get`（統合版）: 計画セルに metrics を統合して返却。
   - weeks.items[].plan_text に加え、`weekly_minutes`（E等）、`unit_load`（F等）、`guideline_amount`（G等）を同梱。
 - `planner_plan_targets`（新）: 書込み候補の自動抽出（A非空・週間時間非空・計画未入力のみ）。
+  - 付加: `prev_range_hint` / `numbering_symbol` / `suggested_plan_text` / `end_of_book`
 - `planner_plan_propose / planner_plan_confirm`（統一 I/F）:
   - 単体: `{week_index, row|book_id, plan_text, overwrite?}`
   - 複数: `{items:[{week_index, row|book_id, plan_text, overwrite?}, …], overwrite?}`
   - 戻り: `confirm_token` は単体・一括どちらにも対応。confirm は単体/一括を自動判別し、`{confirmed, results[]}` を返却。
+  - propose 早期警告: `data.warnings` に `week_index` 範囲外や `plan_text` 52文字超などを通知（confirm時は失敗）。
 
 バリデーションと安全策
 - 書込前提: A[row]非空 かつ 対象週の「週間時間」セル非空。上記を満たさないセルはtargetsに出さず、propose時も弾く。
@@ -84,7 +86,8 @@ MCP ツール（Weekly）
 推奨フロー（少ない呼び出しで安全）
 1) `planner_plan_get` → 計画/metrics を一括取得（週数は `planner_dates_get` で week_count を把握）
 2) `planner_plan_targets` → 今月の「埋めるべきセル」を自動抽出
-3) `planner_plan_propose`（items で一括）→ effects（差分）を人間確認
+   - 各 target に `suggested_plan_text` が付与されるので、そのまま or 軽微修正して items を作成
+3) `planner_plan_propose`（items で一括）→ effects（差分）を人間確認（`data.warnings` に注意）
 4) `planner_plan_confirm`（token）→ 一括確定
 
 プロンプトの運用ルール（要点｜LLMは必ず守る）

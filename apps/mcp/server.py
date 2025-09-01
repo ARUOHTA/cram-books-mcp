@@ -658,6 +658,7 @@ async def tools_help() -> dict:
             "name": "planner_plan_propose",
             "desc": "計画セルのプレビュー（overwrite規則と52文字上限を前提）",
             "args": {"week_index": "1..5", "plan_text": "string", "overwrite": "bool?", "book_id": "string?", "row": "number?", "student_id": "string?", "spreadsheet_id": "string?"},
+            "notes": "items:[] を渡すと一括プレビュー。week_index範囲外や52文字超は data.warnings に警告として返す（confirm時は失敗するため要修正）。",
         },
         {
             "name": "planner_plan_confirm",
@@ -668,6 +669,13 @@ async def tools_help() -> dict:
             "name": "planner_guidance",
             "desc": "LLM向け：週間管理の計画作成ガイド（書式/上限/前提/手順）",
             "args": {},
+        },
+        {
+            "name": "planner_plan_targets",
+            "desc": "書込み候補の自動抽出（A非空・週間時間非空・計画未入力）。TOCに基づく簡易サジェスト付き。",
+            "args": {"student_id": "string?", "spreadsheet_id": "string?"},
+            "returns": "{ week_count, targets:[{week_index,row,book_id,weekly_minutes,guideline_amount,prev_range_hint,numbering_symbol,suggested_plan_text,suggestion_confidence,end_of_book}] }",
+            "notes": "suggested_plan_text は prev_range_hint と guideline_amount/TOC をもとに推定。境界不確実な場合は confidence=low とする。"
         },
     ]
     return {"ok": True, "op": "tools.help", "data": {"tools": tools}}
@@ -836,6 +844,14 @@ async def planner_plan_propose(week_index: int | None = None, plan_text: str | N
         child_tokens: list[str] = []
         effects_all: list[dict] = []
         warnings: list[str] = []
+        # week_count を事前取得（範囲外は警告）
+        week_count = 5
+        try:
+            d = await planner_dates_get(student_id=student_id, spreadsheet_id=spreadsheet_id)
+            if isinstance(d, dict) and d.get("ok"):
+                week_count = _week_count_from_dates(d)
+        except Exception:
+            pass
         for it in items:
             try:
                 wi = int(it.get("week_index"))
@@ -843,6 +859,12 @@ async def planner_plan_propose(week_index: int | None = None, plan_text: str | N
             except Exception:
                 warnings.append(f"bad item: {it}")
                 continue
+            # 早期警告: 週数と文字数
+            if wi < 1 or wi > week_count:
+                warnings.append(f"week_index out of range: {wi} (1..{week_count})")
+                continue
+            if len(txt) > 52:
+                warnings.append(f"plan_text too long ({len(txt)} > 52). It will fail on confirm.")
             ow_local = it.get("overwrite")
             if ow_local is not None:
                 # 一時的にoverwriteをローカル上書き
@@ -865,10 +887,26 @@ async def planner_plan_propose(week_index: int | None = None, plan_text: str | N
     # 単体（従来互換）
     if week_index is None or plan_text is None:
         return {"ok": False, "op": "planner.plan.propose", "error": {"code": "BAD_INPUT", "message": "week_index and plan_text are required for single propose"}}
+    # 単体: 早期警告（週数/文字数）
+    single_warnings: list[str] = []
+    try:
+        d = await planner_dates_get(student_id=student_id, spreadsheet_id=spreadsheet_id)
+        if isinstance(d, dict) and d.get("ok"):
+            wc = _week_count_from_dates(d)
+            if int(week_index) < 1 or int(week_index) > wc:
+                single_warnings.append(f"week_index out of range: {week_index} (1..{wc})")
+    except Exception:
+        pass
+    if len(str(plan_text)) > 52:
+        single_warnings.append(f"plan_text too long ({len(str(plan_text))} > 52). It will fail on confirm.")
+
     res = await _propose_single(int(week_index), str(plan_text), row, book_id)
     if not res.get("ok"):
         return {"ok": False, "op": "planner.plan.propose", "error": res.get("error")}
-    return {"ok": True, "op": "planner.plan.propose", "data": res["data"]}
+    data = res.get("data") or {}
+    if single_warnings:
+        data["warnings"] = single_warnings
+    return {"ok": True, "op": "planner.plan.propose", "data": data}
 
 @mcp.tool()
 async def planner_plan_confirm(confirm_token: str) -> dict:
@@ -960,6 +998,67 @@ async def planner_plan_targets(student_id: Any = None, spreadsheet_id: Any = Non
     rows_with_book = set(int(it.get("row")) for it in id_items if it.get("row"))
     row_to_book = {int(it["row"]): it.get("book_id") for it in id_items if it.get("row")}
 
+    # 目次/numbering 情報を書籍ごとに収集（簡易）
+    unique_book_ids = [it.get("book_id") for it in id_items if it.get("book_id")]
+    book_meta: dict[str, dict] = {}
+    if unique_book_ids:
+        try:
+            bres = await books_get(book_ids=list(dict.fromkeys(unique_book_ids)))
+            if isinstance(bres, dict) and bres.get("ok"):
+                for b in ((bres.get("data") or {}).get("books") or []):
+                    bid = b.get("id")
+                    chapters = (((b.get("structure") or {}).get("chapters")) or [])
+                    sym = None
+                    max_end = None
+                    starts: list[int] = []
+                    ends: list[int] = []
+                    for ch in chapters:
+                        rng = ch.get("range") or {}
+                        s = rng.get("start")
+                        e = rng.get("end")
+                        try:
+                            if s is not None: starts.append(int(s))
+                            if e is not None: ends.append(int(e))
+                        except Exception:
+                            pass
+                        if not sym:
+                            sym = (ch.get("numbering") or "").strip() or None
+                    max_end = max(ends) if ends else None
+                    # numbering モード推定: リセット か キャリー
+                    mode = None
+                    if len(starts) >= 2 and len(ends) >= 1:
+                        try:
+                            if starts[1] == 1:
+                                mode = "reset"
+                            elif starts[1] == (ends[0] + 1):
+                                mode = "carry"
+                        except Exception:
+                            pass
+                    book_meta[str(bid)] = {"symbol": sym or "問", "max_end": max_end, "mode": mode}
+        except Exception:
+            pass
+
+    def _parse_prev_end(text: str) -> tuple[int | None, str | None]:
+        if not text:
+            return (None, None)
+        s = str(text)
+        # 優先: 範囲表記 X~Y
+        import re
+        m = re.findall(r"(\d+)\s*~\s*(\d+)", s)
+        if m:
+            try:
+                return (int(m[-1][1]), None)
+            except Exception:
+                return (None, None)
+        # 次: 数字の最後を採用
+        m2 = re.findall(r"(\d+)", s)
+        if m2:
+            try:
+                return (int(m2[-1]), None)
+            except Exception:
+                return (None, None)
+        return (None, None)
+
     # 週ごとの maps
     wk_metrics: dict[int, dict[int, dict]] = {}
     for wk in ((mets.get("data") or {}).get("weeks") or []):
@@ -990,13 +1089,37 @@ async def planner_plan_targets(student_id: Any = None, spreadsheet_id: Any = Non
                 if pj and str(pj.get("plan_text") or "").strip():
                     prev_hint = str(pj.get("plan_text"))
                     break
+            bid = row_to_book.get(r)
+            ga = (metrics_rows.get(r) or {}).get("guideline_amount")
+            # 簡易サジェスト（prev_range_hint と TOC から計算）
+            prev_end, _ = _parse_prev_end(prev_hint)
+            meta = book_meta.get(str(bid) if bid else "", {})
+            sym = meta.get("symbol") or "問"
+            max_end = meta.get("max_end")
+            start = (int(prev_end) + 1) if isinstance(prev_end, int) else 1
+            suggested_text = None
+            end_of_book = False
+            if isinstance(ga, (int, float)) and ga:
+                try:
+                    e = start + int(ga) - 1
+                    if isinstance(max_end, int) and e > max_end:
+                        e = max_end
+                        end_of_book = True
+                    suggested_text = f"{sym}{start}~{e}" + (" ★完了！" if end_of_book else "")
+                except Exception:
+                    suggested_text = None
+
             targets.append({
                 "week_index": wi,
                 "row": r,
-                "book_id": row_to_book.get(r),
+                "book_id": bid,
                 "weekly_minutes": weekly_minutes,
-                "guideline_amount": (metrics_rows.get(r) or {}).get("guideline_amount"),
+                "guideline_amount": ga,
                 "prev_range_hint": prev_hint,
+                "numbering_symbol": sym,
+                "suggested_plan_text": suggested_text,
+                "suggestion_confidence": "medium" if meta.get("mode") in ("reset","carry") else "low",
+                "end_of_book": end_of_book,
             })
 
     return {"ok": True, "op": "planner.plan.targets", "data": {"week_count": week_count, "targets": targets}}

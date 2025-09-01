@@ -31,3 +31,10 @@
 次の候補タスク:
 - ローカル実行で `apps/gas/deploy_and_test.sh -d '{"op":"books.find","query":"青チャート"}'` を用い、`doPost` 到達と JSON 応答を確認。
 - 確認後、`books.create/update/filter` の POST 実装とテストケースを追加。
+
+## 2025-09-01
+
+- feat(mcp): planner_plan_propose に早期警告を追加（`data.warnings`）。`week_index` 範囲外と `plan_text` 52文字超を検知。
+- feat(mcp): planner_plan_targets を強化。Books TOCから `numbering_symbol`/`max_end` を把握し、`suggested_plan_text` を付与（prev_range_hint と guideline_amount から推定）。`end_of_book` を同梱。
+- docs: tools_help/README/AGENTS を更新（targetsのサジェスト/ proposeのwarnings を明記）。
+- chore: 作業ブランチ `feat/llm-ux-improvements` を作成。
