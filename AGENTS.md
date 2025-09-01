@@ -47,6 +47,17 @@
   - 当面は GET で統一運用（複数IDもGETで可）。
   - 将来は Execution API（scripts.run, OAuth）経由のPOSTを検討（認証/HMACも並行）。
 
+### ChatGPT コネクタ対応（重要：分離運用）
+
+- 背景: ChatGPTのコネクタは MCP のうち `search` と `fetch` の2ツールのみを使用します。Claude のように任意のツール（books_filter, students_*, planner_* 等）は呼びません。
+- 方針: Claude向けの多機能MCP（本main）と、ChatGPT向け最小MCP（別ブランチ）を分離。
+  - Claude向け（main）: `books_*` / `students_*` / `planner_*` を維持（本番運用）。
+  - ChatGPT向け（feat/chatgpt-connector-compat）: `search`/`fetch` を提供。`/sse/` 互換エンドポイント。現状はBooks検索/取得に特化。
+- 制約: ChatGPTでは「一覧」「filter」等の任意ツールは使えません。searchで広く拾い、fetchで詳細取得という操作が基本です。
+- 接続手順（ChatGPT）: `https://<SERVICE>.a.run.app/sse/` をサーバーURLに設定し、allowed_tools は `search`,`fetch`。
+- 安全運用: Claude用とChatGPT用でCloud Runサービスを分離することを推奨（例: `cram-books-mcp` と `cram-books-mcp-chatgpt`）。
+- 拡張計画（任意）: id前置（`book:`/`student:`/`weekly:`/`monthly:`）により、fetchで各データ源へ振り分け可能。searchは簡易クエリ（subject/title/id/limit）を解釈して横断メタサーチ化。
+
 
 ## 📁 プロジェクト構造
 
