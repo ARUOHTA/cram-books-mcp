@@ -1297,8 +1297,9 @@ async def planner_guidance() -> dict:
                 ],
                 "write": [
                     "planner_plan_targets で 'A非空・週間時間非空・未入力' の候補を抽出",
-                    "planner_plan_propose(items=[…]) で一括プレビュー（effectsを人間確認）",
-                    "planner_plan_confirm(confirm_token) で一括確定"
+                    "候補から items を作成（週混在可、suggested_plan_text を叩き台に）",
+                    "planner_plan_create(items) で一括作成（高速）。data.warnings と guidance_digest を必ず確認",
+                    "（後方互換）旧: planner_plan_propose/items → planner_plan_confirm は非推奨"
                 ]
             }
         }
